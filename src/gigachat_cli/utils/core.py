@@ -54,9 +54,10 @@ class GigaChatManager:
         """Создание экземпляра GigaChat с текущей моделью из конфига"""
         current_model = self.config.get_model()
         
+        verify_ssl = os.getenv("GIGACHAT_SSL_VERIFY", "1") not in ("0", "false", "no")
         return GigaChat(
             credentials=self._get_api_key(),
-            verify_ssl_certs=False,
+            verify_ssl_certs=verify_ssl,
             model=current_model,
             scope="GIGACHAT_API_PERS",
             temperature=0.1,
