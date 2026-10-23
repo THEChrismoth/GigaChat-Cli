@@ -3,6 +3,8 @@ from textual.reactive import reactive
 from pathlib import Path
 import os
 
+from gigachat_cli.utils.file import split_path_argument
+
 
 class FileList(Static):
     """Виджет автодополнения файлов"""
@@ -112,34 +114,15 @@ class FileList(Static):
         """
         selected_file = self.get_selected_file()
         if selected_file and self.current_command:
-            # Разбиение команды на части
-            parts = self.current_command.strip().split()
-            
-            if len(parts) < 2:
-                # Если только команда без аргументов, просто добавляем файл
-                new_text = self.current_command + " " + selected_file
+            command = self.current_command
+
+            if command.endswith(' '):
+                # Начат новый аргумент - просто добавляем файл
+                new_text = command + selected_file
             else:
-                # Замена последней части команды
-                base_parts = parts[:-1]  # Все части кроме последней
-                last_part = parts[-1]
-                
-                if last_part.startswith('/'):
-                    # Абсолютный путь - добавляем к корню
-                    new_last_part = '/' + selected_file
-                elif '/' in last_part:
-                    # Если есть путь, заменяем последний сегмент
-                    path_parts = last_part.split('/')
-                    if len(path_parts) > 1:
-                        base_path = '/'.join(path_parts[:-1]) + '/'
-                        new_last_part = base_path + selected_file
-                    else:
-                        new_last_part = selected_file
-                else:
-                    # Простая замена
-                    new_last_part = selected_file
-                
-                # Сборка новой команды
-                new_text = ' '.join(base_parts) + ' ' + new_last_part
+                # Замена введенного начала имени в последнем аргументе (путь до него сохраняется)
+                _, typed_name = split_path_argument(command.split()[-1])
+                new_text = command[:len(command) - len(typed_name)] + selected_file
             
             input_field.value = new_text
             input_field.cursor_position = len(new_text)

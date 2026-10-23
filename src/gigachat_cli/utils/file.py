@@ -2,20 +2,35 @@ from pathlib import Path
 import os
 from typing import List, Tuple
 
+from gigachat_cli.utils.command import FILE_COMMANDS
+
+
+def split_path_argument(argument: str) -> Tuple[str, str]:
+    """
+    Разделение аргумента-пути на директорию (с завершающим разделителем) и имя
+
+    Args:
+        argument: Аргумент команды, например "src/gig" или "C:\\Users\\da"
+
+    Returns:
+        Tuple[str, str]: (директория, начало имени файла)
+    """
+    separator_index = max(argument.rfind('/'), argument.rfind('\\'))
+    return argument[:separator_index + 1], argument[separator_index + 1:]
+
 
 class FileUtils:
     """Утилита для работы с файловой системой и автодополнением файлов"""
-    
+
     def __init__(self, command_utils):
         """
         Инициализация утилиты файлов
-        
+
         Args:
             command_utils: Утилита команд для получения текущей директории
         """
         self.command_utils = command_utils
-        # Список команд, работающих с файловой системой
-        self.file_commands = ['cd', 'ls', 'cp', 'mv', 'rm', 'mkdir', 'cat', 'touch', 'find', 'grep']
+        self.file_commands = FILE_COMMANDS
     
     def should_show_files(self, text: str) -> bool:
         """
@@ -57,35 +72,23 @@ class FileUtils:
         parts = text.strip().split()
         if len(parts) < 1:
             return [], text, ""
-        
+
         current_dir = self.command_utils.get_current_directory()
-        
-        # Обработка случая когда есть только команда с пробелом (например: "!ls ")
-        if len(parts) == 1 and text.endswith(' '):
-            search_pattern = ""
-            base_path = current_dir
+
+        # После пробела начинается новый аргумент, иначе дополняется последний
+        if text.endswith(' '):
             last_part = ""
         elif len(parts) >= 2:
             last_part = parts[-1]
-            
-            # Определение базового пути для поиска
-            if last_part.startswith('/'):
-                # Абсолютный путь - начинаем с корня
-                base_path = Path('/')
-                search_pattern = last_part[1:]  # Убираем начальный слеш
-            elif '/' in last_part:
-                # Относительный путь с поддиректориями
-                path_parts = last_part.split('/')
-                search_dir = '/'.join(path_parts[:-1])
-                search_pattern = path_parts[-1] or ""
-                
-                base_path = current_dir / search_dir
-            else:
-                # Простой поиск в текущей директории
-                search_pattern = last_part
-                base_path = current_dir
         else:
             return [], text, str(current_dir)
+
+        # Разделение аргумента на директорию и шаблон имени (поддерживаются / и \)
+        dir_part, search_pattern = split_path_argument(last_part)
+
+        # Определение базового пути для поиска (абсолютный, ~ или относительный)
+        dir_path = Path(os.path.expanduser(dir_part)) if dir_part else Path()
+        base_path = dir_path if dir_path.is_absolute() else current_dir / dir_path
         
         # Проверка существования базового пути
         if not base_path.exists() or not base_path.is_dir():
