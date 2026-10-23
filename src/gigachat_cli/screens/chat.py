@@ -162,13 +162,14 @@ class ChatScreen(Screen):
             event.prevent_default()
             return
             
-        # Игнорирование отправки при активной потоковой обработке
+        # Игнорирование отправки при активной обработке
         if self.is_processing_stream:
             event.prevent_default()
             return
-            
-        # Запуск обработки сообщения
-        asyncio.create_task(self.process_message())
+
+        # Запуск обработки сообщения (флаг ставится сразу, чтобы исключить повторную отправку)
+        self.is_processing_stream = True
+        self.current_stream_task = asyncio.create_task(self._run_message_processing())
         command_list.add_class("hidden")
         file_list.add_class("hidden")
         event.prevent_default()
@@ -239,12 +240,26 @@ class ChatScreen(Screen):
             event.prevent_default()
             event.stop()
         
-        # Обработка Ctrl+C для отмены потоковой обработки
-        elif event.key == "ctrl+c" and self.is_processing_stream:
+        # Обработка Esc / Ctrl+C для отмены запроса или терминальной команды
+        elif event.key in ("escape", "ctrl+c") and self.is_processing_stream:
             self._cleanup_stream_processing()
-            self.update_chat_display(f"**Вы:** {self.last_user_message}\n\n**GigaChat:**\n\n*Запрос отменен пользователем*")
+            self.query_one("#message_input", Input).value = ""
+            self.update_chat_display(f"**Вы:** {self.last_user_message}\n\n*Запрос отменен пользователем*")
             event.prevent_default()
-    
+            event.stop()
+
+    async def _run_message_processing(self) -> None:
+        """Обработка сообщения с гарантированным сбросом состояния"""
+        try:
+            await self.process_message()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._hide_typing_indicator()
+            self.is_processing_stream = False
+            self.current_response_content = ""
+            self.current_stream_task = None
+
     async def process_message(self) -> None:
         """Обработка введенного сообщения"""
         input_field = self.query_one("#message_input", Input)
@@ -289,12 +304,10 @@ class ChatScreen(Screen):
         self.current_typing_indicator = TypingIndicator()
         chat_container = self.query_one("#chat_container")
         chat_container.mount(self.current_typing_indicator)
-        
-        # Запуск потоковой обработки
-        self.is_processing_stream = True
-        self.current_stream_task = asyncio.create_task(self.get_bot_response_stream(user_text))
-        
         input_field.focus()
+
+        # Потоковое получение ответа
+        await self.get_bot_response_stream(user_text)
 
     def _update_model_display(self) -> None:
         """Обновление отображения текущей модели"""
@@ -337,35 +350,42 @@ class ChatScreen(Screen):
         self.current_response_content = ""
         has_content = False
         
+        project_path = str(self.command_utils.get_current_directory())
+
         try:
-            async for chunk in get_answer_stream(user_text):
+            async for chunk in get_answer_stream(user_text, project_path=project_path):
                 # Если пришел контент - убираем индикатор и начинаем показывать текст
                 if chunk.content and not has_content:
                     has_content = True
                     self._hide_typing_indicator()
-                
+
                 # Добавляем контент
                 if chunk.content:
                     self.current_response_content += chunk.content
                     self.update_chat_display_stream(user_text, self.current_response_content)
-                
+
+                # Отображение ошибки API
+                if chunk.error:
+                    self._show_stream_error(user_text, chunk.error)
+                    break
+
                 if chunk.is_final:
                     break
-                    
+
                 # Небольшая задержка для плавного отображения
                 await asyncio.sleep(0.01)
-            
+
         except Exception as e:
-            await self._handle_stream_error(user_text, f"**Ошибка:** {str(e)}")
+            self._show_stream_error(user_text, str(e))
         finally:
             # Гарантированно убираем индикатор в конце
             self._hide_typing_indicator()
-            self.is_processing_stream = False
             self.current_response_content = ""
 
-    async def _handle_stream_error(self, user_text: str, error_message: str):
-        """Обработка ошибок потоковой обработки"""
+    def _show_stream_error(self, user_text: str, error: str) -> None:
+        """Отображение ошибки потоковой обработки"""
         self._hide_typing_indicator()
-        self.update_chat_display_stream(user_text, error_message)
-        self.is_processing_stream = False
-        self.current_response_content = ""
+        content = self.current_response_content
+        if content:
+            content += "\n\n"
+        self.update_chat_display_stream(user_text, f"{content}**Ошибка:** {error}")

@@ -1,14 +1,40 @@
 import os
 import asyncio
-import aiofiles
 import re
-from typing import List, Dict, Optional, AsyncGenerator, Union, Any
+from typing import List, Dict, Optional, AsyncGenerator, Any, Tuple
 from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_gigachat.chat_models import GigaChat
 
 from gigachat_cli.utils.config import Config
+
+
+# Значения переменной окружения, отключающие проверку SSL
+_FALSE_VALUES = {"0", "false", "no", "off"}
+
+# Служебные директории, которые не индексируются
+_IGNORED_DIRS = {'__pycache__', 'node_modules', 'venv', '.venv', '.git', '.vscode', '.idea'}
+
+# Ограничение на количество файлов при обходе проекта
+_MAX_PROJECT_FILES = 5000
+
+# Расширения файлов, упоминание которых в запросе подгружает файл в контекст
+_FILE_EXTENSIONS = (
+    'py', 'js', 'ts', 'jsx', 'tsx', 'json', 'md', 'yaml', 'yml', 'toml', 'ini', 'cfg',
+    'txt', 'html', 'css', 'xml', 'java', 'cpp', 'c', 'h', 'go', 'rs', 'sh',
+)
+
+_FILE_REFERENCE_PATTERN = re.compile(
+    r'(?<![\w./\\:-])((?:[\w.-]+[/\\])*[\w-][\w.-]*\.(?:' + '|'.join(_FILE_EXTENSIONS) + r'))\b',
+    re.IGNORECASE,
+)
+
+_SSL_HINT = (
+    "\n\nПохоже на ошибку проверки SSL-сертификата. Установите корневой сертификат "
+    "Минцифры и укажите путь к нему в GIGACHAT_CA_BUNDLE_FILE, либо отключите проверку: "
+    "GIGACHAT_SSL_VERIFY=0"
+)
 
 
 @dataclass
@@ -19,448 +45,430 @@ class StreamChunk:
     error: Optional[str] = None
 
 
+def _iter_project_files(project_path: str):
+    """Обход файлов проекта без служебных директорий и скрытых файлов"""
+    count = 0
+    for root, dirs, files in os.walk(project_path):
+        dirs[:] = sorted(d for d in dirs if not d.startswith('.') and d not in _IGNORED_DIRS)
+        for file in sorted(files):
+            if file.startswith('.'):
+                continue
+            file_path = os.path.join(root, file)
+            yield os.path.relpath(file_path, project_path), file_path
+            count += 1
+            if count >= _MAX_PROJECT_FILES:
+                return
+
+
+def _normalize_path_key(path: str) -> str:
+    """Нормализация пути для поиска в индексе"""
+    key = path.replace('\\', '/').lower()
+    while key.startswith('./'):
+        key = key[2:]
+    return key
+
+
 class GigaChatManager:
     """Менеджер для работы с GigaChat API"""
-    
+
     _instance = None
-    
+
     def __new__(cls):
         """Реализация singleton паттерна"""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         """Инициализация менеджера"""
         if not hasattr(self, '_initialized') or not self._initialized:
             self.conversation_history = []
             self.config = Config()
             self.project_context = {}
-            self._file_cache = {}
-            self._file_index = {}
+            self._file_index: Dict[str, str] = {}
+            self._file_index_path: Optional[str] = None
             self._last_files_context = []
-            self._last_user_messages = []
+            self._giga: Optional[GigaChat] = None
+            self._giga_key: Optional[Tuple] = None
             self._initialized = True
-    
+
     def _get_api_key(self) -> str:
         """Получение API ключа из переменных окружения"""
         api_key = os.getenv("GIGACHAT_API_KEY")
         if not api_key:
             raise Exception("GIGACHAT_API_KEY не установен. Пожалуйста, установите переменную окружения.")
         return api_key
-    
+
+    @staticmethod
+    def _get_ssl_settings() -> Dict[str, Any]:
+        """
+        Настройки SSL из переменных окружения
+
+        Если переменные не заданы, параметры не передаются и SDK GigaChat
+        использует собственные настройки (GIGACHAT_VERIFY_SSL_CERTS и т.д.)
+        """
+        settings = {}
+        verify = os.getenv("GIGACHAT_SSL_VERIFY")
+        if verify is not None and verify.strip():
+            settings["verify_ssl_certs"] = verify.strip().lower() not in _FALSE_VALUES
+        ca_bundle = os.getenv("GIGACHAT_CA_BUNDLE_FILE")
+        if ca_bundle and ca_bundle.strip():
+            settings["ca_bundle_file"] = ca_bundle.strip()
+        return settings
+
     def _get_giga_chat_instance(self) -> GigaChat:
-        """Создание экземпляра GigaChat с текущей моделью из конфига"""
+        """Получение экземпляра GigaChat с текущей моделью из конфига (с кешированием)"""
         current_model = self.config.get_model()
-        
-        verify_ssl = os.getenv("GIGACHAT_SSL_VERIFY", "1") not in ("0", "false", "no")
-        return GigaChat(
-            credentials=self._get_api_key(),
-            verify_ssl_certs=verify_ssl,
-            model=current_model,
-            scope="GIGACHAT_API_PERS",
-            temperature=0.1,
-            max_tokens=4000,
-            timeout=60
-        )
-    
-    async def send_message_stream(self, prompt: str, system_prompt: Optional[str] = None) -> AsyncGenerator[StreamChunk, None]:
+        api_key = self._get_api_key()
+        ssl_settings = self._get_ssl_settings()
+
+        key = (current_model, api_key, tuple(sorted(ssl_settings.items())))
+        if self._giga is None or self._giga_key != key:
+            self._giga = GigaChat(
+                credentials=api_key,
+                model=current_model,
+                scope="GIGACHAT_API_PERS",
+                temperature=0.1,
+                max_tokens=4000,
+                timeout=60,
+                **ssl_settings
+            )
+            self._giga_key = key
+        return self._giga
+
+    @staticmethod
+    def _format_error(error: str) -> str:
+        """Форматирование текста ошибки с подсказкой"""
+        if "CERTIFICATE_VERIFY_FAILED" in error or "SSLCertVerificationError" in error:
+            return error + _SSL_HINT
+        return error
+
+    async def send_message_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        history_prompt: Optional[str] = None
+    ) -> AsyncGenerator[StreamChunk, None]:
         """
         Потоковая отправка сообщения
-        
+
         Args:
-            prompt: Запрос пользователя
+            prompt: Запрос пользователя (может включать содержимое файлов)
             system_prompt: Системный промпт (опционально)
-            
+            history_prompt: Текст запроса для сохранения в историю
+                (по умолчанию prompt; позволяет не хранить в истории содержимое файлов)
+
         Yields:
             StreamChunk: Чанки потокового ответа
         """
         try:
             giga = self._get_giga_chat_instance()
-            
-            # Сохранение сообщения пользователя для контекста
-            self._last_user_messages.append(prompt)
-            if len(self._last_user_messages) > 5:
-                self._last_user_messages = self._last_user_messages[-5:]
-            
+
             # Подготовка сообщений с полной историей диалога
-            messages = []
-            
-            # Добавление системного промпта с контекстом
-            enhanced_system_prompt = self._enhance_system_prompt(system_prompt)
-            if enhanced_system_prompt:
-                messages.append(SystemMessage(content=enhanced_system_prompt))
-                
-            # Добавление всей истории диалога
+            messages = [SystemMessage(content=system_prompt or "Ты - полезный AI-ассистент для разработчиков.")]
             messages.extend(self.conversation_history)
-            
-            # Добавление текущего запроса
             messages.append(HumanMessage(content=prompt))
-            
+
             full_response = ""
-            
+
             # Запуск потокового запроса в отдельном потоке
-            loop = asyncio.get_event_loop()
-            
+            loop = asyncio.get_running_loop()
+
             def sync_stream():
                 """Синхронная потоковая обработка"""
                 try:
-                    stream = giga.stream(messages)
-                    for chunk in stream:
+                    for chunk in giga.stream(messages):
                         if hasattr(chunk, 'content') and chunk.content:
                             yield StreamChunk(content=chunk.content)
                     yield StreamChunk(content="", is_final=True)
                 except Exception as e:
                     yield StreamChunk(content="", is_final=True, error=str(e))
-            
-            # Создание синхронного генератора
+
             sync_gen = sync_stream()
-            
+
             # Обработка чанков из синхронного генератора
             while True:
-                try:
-                    # Получение чанка в отдельном потоке
-                    chunk = await loop.run_in_executor(None, lambda: next(sync_gen))
-                    
-                    if chunk.error:
-                        raise Exception(f"Ошибка API: {chunk.error}")
-                    
-                    if chunk.content:
-                        full_response += chunk.content
-                    
-                    yield chunk
-                    
-                    if chunk.is_final:
-                        break
-                        
-                except StopIteration:
+                chunk = await loop.run_in_executor(None, next, sync_gen, None)
+                if chunk is None:
                     break
-            
+
+                if chunk.error:
+                    raise Exception(f"Ошибка API: {chunk.error}")
+
+                if chunk.content:
+                    full_response += chunk.content
+
+                yield chunk
+
+                if chunk.is_final:
+                    break
+
             # Сохранение в историю диалога
             if full_response:
-                self.conversation_history.append(HumanMessage(content=prompt))
+                self.conversation_history.append(HumanMessage(content=history_prompt or prompt))
                 self.conversation_history.append(AIMessage(content=full_response))
-                
+
                 # Ограничение размера истории
                 if len(self.conversation_history) > 20:
                     self.conversation_history = self.conversation_history[-20:]
-                    
-        except Exception as e:
-            yield StreamChunk(content="", is_final=True, error=str(e))
-    
-    def _enhance_system_prompt(self, system_prompt: Optional[str] = None) -> str:
-        """Добавление контекста предыдущих сообщений в системный промпт"""
-        base_prompt = system_prompt or "Ты - полезный AI-ассистент для разработчиков."
-        
-        # Добавление информации о последних сообщениях пользователя
-        if len(self._last_user_messages) > 1:
-            previous_messages = self._last_user_messages[:-1]
-            context_info = f"Предыдущие запросы пользователя: {'; '.join(previous_messages[-3:])}"
-            return f"{base_prompt} {context_info}. Учитывай этот контекст при ответе."
-        
-        return base_prompt
 
-    def _build_file_index(self, project_path: str = None) -> Dict[str, str]:
-        """Построение индекса всех файлов в проекте для быстрого поиска"""
-        if not project_path:
-            project_path = os.getcwd()
-        
-        file_index = {}
-        
-        try:
-            for root, dirs, files in os.walk(project_path):
-                # Игнорирование служебных директорий
-                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in [
-                    '__pycache__', 'node_modules', 'venv', '.git', '.vscode', '.idea'
-                ]]
-                
-                for file in files:
-                    if file.startswith('.'):
-                        continue
-                    
-                    file_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(file_path, project_path)
-                    
-                    # Сохранение полного пути и относительного пути
-                    file_index[file] = file_path
-                    file_index[relative_path] = file_path
-                    file_index[file.lower()] = file_path
-            
-            return file_index
-            
         except Exception as e:
-            print(f"Ошибка построения индекса файлов: {e}")
-            return {}
-    
-    def _find_file_in_project(self, filename: str, project_path: str = None) -> Optional[str]:
-        """Поиск полного пути к файлу в проекте включая поддиректории"""
-        if not project_path:
-            project_path = os.getcwd()
-        
-        # Построение индекса если еще не построен
-        if not hasattr(self, '_file_index') or not self._file_index:
-            self._file_index = self._build_file_index(project_path)
-        
-        # Поиск по разным вариантам
-        search_patterns = [
-            filename,
-            filename.lower(),
-            os.path.basename(filename),
-            os.path.basename(filename).lower(),
-        ]
-        
-        for pattern in search_patterns:
-            if pattern in self._file_index:
-                found_path = self._file_index[pattern]
-                if os.path.exists(found_path):
-                    return found_path
-        
-        # Рекурсивный поиск если не нашли в индексе
+            yield StreamChunk(content="", is_final=True, error=self._format_error(str(e)))
+
+    def _build_file_index(self, project_path: str) -> Dict[str, str]:
+        """Построение индекса файлов проекта: относительный путь и имя файла -> полный путь"""
+        file_index = {}
         try:
-            for root, dirs, files in os.walk(project_path):
-                dirs[:] = [d for d in dirs if not d.startswith('.')]
-                
-                for file in files:
-                    if file.lower() == filename.lower() or file == filename:
-                        return os.path.join(root, file)
-                    
-                    if filename.lower() in file.lower():
-                        return os.path.join(root, file)
-        except:
-            pass
-        
+            for relative_path, file_path in _iter_project_files(project_path):
+                # Приоритет у первого найденного (менее вложенного) файла
+                file_index.setdefault(_normalize_path_key(relative_path), file_path)
+                file_index.setdefault(os.path.basename(relative_path).lower(), file_path)
+        except OSError:
+            return {}
+        return file_index
+
+    def _lookup_file(self, filename: str) -> Optional[str]:
+        """Поиск файла в текущем индексе"""
+        key = _normalize_path_key(filename)
+        for candidate in (key, os.path.basename(key)):
+            found_path = self._file_index.get(candidate)
+            if found_path and os.path.isfile(found_path):
+                return found_path
         return None
-   
+
+    def _find_file_in_project(self, filename: str, project_path: str) -> Optional[str]:
+        """Поиск полного пути к файлу в проекте включая поддиректории"""
+        project_path = os.path.abspath(project_path)
+
+        # Перестроение индекса при смене директории проекта
+        if self._file_index_path != project_path:
+            self._file_index = self._build_file_index(project_path)
+            self._file_index_path = project_path
+            return self._lookup_file(filename)
+
+        found_path = self._lookup_file(filename)
+        if found_path:
+            return found_path
+
+        # Индекс мог устареть (файл создан или перемещен) - перестраиваем и ищем повторно
+        self._file_index = self._build_file_index(project_path)
+        return self._lookup_file(filename)
+
     async def load_file_content(self, file_path: str, max_size: int = 15000) -> Optional[str]:
         """Загрузка содержимого файла"""
-        try:
+        def read() -> Optional[str]:
             if not os.path.exists(file_path):
                 return None
-            
+
             file_size = os.path.getsize(file_path)
             if file_size > max_size:
                 return f"[Файл слишком большой: {file_size} байт, лимит: {max_size} байт]"
-            
-            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
-                content = await f.read()
-                return content
-                
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+
+        try:
+            return await asyncio.to_thread(read)
         except UnicodeDecodeError:
             return "[Бинарный файл или неподдерживаемая кодировка]"
         except Exception as e:
             return f"[Ошибка чтения файла: {str(e)}]"
-    
-    async def load_multiple_files(self, file_names: List[str], project_path: str = None) -> Dict[str, str]:
+
+    async def load_multiple_files(self, file_names: List[str], project_path: Optional[str] = None) -> Dict[str, str]:
         """Загрузка содержимого нескольких файлов по их именам"""
+        project_path = project_path or os.getcwd()
         files_content = {}
-        
+
         for file_name in file_names:
-            full_path = self._find_file_in_project(file_name, project_path)
-            
-            if full_path and os.path.exists(full_path):
+            full_path = await asyncio.to_thread(self._find_file_in_project, file_name, project_path)
+
+            if full_path:
                 content = await self.load_file_content(full_path)
-                relative_path = os.path.relpath(full_path, project_path or os.getcwd())
+                relative_path = os.path.relpath(full_path, project_path)
                 files_content[relative_path] = content
             else:
                 files_content[file_name] = f"[Файл не найден в проекте: {file_name}]"
-        
+
         return files_content
-    
+
     def _extract_file_references(self, text: str) -> List[str]:
         """Извлечение упоминаний файлов из текста запроса"""
-        patterns = [
-            r'(\w+\.py)', r'(\w+\.js)', r'(\w+\.ts)', r'(\w+\.json)', r'(\w+\.md)', r'(\w+\.yaml)', r'(\w+\.yml)',
-            r'(\w+\.txt)', r'(\w+\.html)', r'(\w+\.css)', r'(\w+\.xml)', r'(\w+\.java)', r'(\w+\.cpp)', r'(\w+\.h)',
-            r'файл[а-я]*\s+["\']?([^"\'\s]+)["\']?',
-            r'file\s+["\']?([^"\'\s]+)["\']?',
-            r'([a-zA-Z_][a-zA-Z0-9_]*\.[a-z]+)',
-        ]
-        
-        found_files = set()
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                if match and not match.startswith(('.', '/', '\\')):
-                    found_files.add(match)
-        
-        quoted_patterns = [
-            r'["\']([^"\']+\.[a-z]+)["\']',
-            r'\(([^)]+\.[a-z]+)\)',
-            r'\[([^]]+\.[a-z]+)\]',
-        ]
-        
-        for pattern in quoted_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                if match and not match.startswith(('.', '/', '\\')):
-                    found_files.add(match)
-        
-        return list(found_files)
-    
-    async def get_contextual_answer_stream(self, prompt: str, project_path: str = None) -> AsyncGenerator[StreamChunk, None]:
+        found_files = []
+        for match in _FILE_REFERENCE_PATTERN.findall(text):
+            if match not in found_files:
+                found_files.append(match)
+        return found_files
+
+    async def get_contextual_answer_stream(self, prompt: str, project_path: Optional[str] = None) -> AsyncGenerator[StreamChunk, None]:
         """Потоковая версия с контекстом файлов"""
-        if not project_path:
-            project_path = os.getcwd()
-        
+        project_path = project_path or os.getcwd()
+
         referenced_files = self._extract_file_references(prompt)
-        
+
         system_message = "Ты - опытный разработчик. Тебе предоставлено содержимое файлов проекта."
-        
+
         if referenced_files:
             files_content = await self.load_multiple_files(referenced_files, project_path)
-            
+
             context_info = "Содержимое файлов проекта:\n\n"
-            files_found = False
-            
+            loaded_files = []
+
             for file_path, content in files_content.items():
-                if not content.startswith('['):
+                if content and not content.startswith('['):
                     context_info += f"--- {file_path} ---\n{content}\n\n"
-                    files_found = True
-            
-            if files_found:
+                    loaded_files.append(file_path)
+
+            if loaded_files:
+                self._last_files_context = loaded_files
                 full_prompt = f"{context_info}\n\nЗапрос пользователя: {prompt}"
-                
-                system_message = """Ты - опытный разработчик. Тебе предоставлено содержимое файлов проекта. 
+
+                system_message = """Ты - опытный разработчик. Тебе предоставлено содержимое файлов проекта.
                 Анализируй конкретный код из этих файлов и давай точные ответы с примерами.
                 Цитируй конкретные строки кода из предоставленных файлов.
                 Если предлагаешь изменения - покажи конкретный код ДО и ПОСЛЕ."""
-                
-                async for chunk in self.send_message_stream(full_prompt, system_message):
+
+                async for chunk in self.send_message_stream(full_prompt, system_message, history_prompt=prompt):
                     yield chunk
                 return
-        
+
         async for chunk in self.send_message_stream(prompt, system_message):
             yield chunk
-    
-    async def load_project_context(self, project_path: str = None) -> Dict:
-        """Загрузка контекста проекта"""
-        if not project_path:
-            project_path = os.getcwd()
-        
+
+    def _collect_project_context(self, project_path: str) -> Dict:
+        """Синхронный сбор структуры проекта и содержимого ключевых файлов"""
         context = {
             "project_path": project_path,
             "file_structure": [],
             "key_files": {},
             "dependencies": []
         }
-        
+
         try:
-            self._file_index = self._build_file_index(project_path)
-            
-            for root, dirs, files in os.walk(project_path):
-                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in [
-                    '__pycache__', 'node_modules', 'venv', '.git'
-                ]]
-                
-                for file in files:
-                    if file.startswith('.'):
+            key_candidates = []
+            for relative_path, file_path in _iter_project_files(project_path):
+                context["file_structure"].append(relative_path)
+                file_name = os.path.basename(relative_path)
+                if self._is_key_file(file_name):
+                    # Сначала конфигурационные файлы, затем менее вложенные
+                    priority = 0 if file_name in self._KEY_FILE_NAMES else 1
+                    key_candidates.append((priority, relative_path.count(os.sep), relative_path, file_path))
+
+            # Используются только первые 5 ключевых файлов - читаем только их
+            for _, _, relative_path, file_path in sorted(key_candidates)[:5]:
+                try:
+                    if os.path.getsize(file_path) >= 10000:
                         continue
-                        
-                    file_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(file_path, project_path)
-                    
-                    context["file_structure"].append(relative_path)
-                    
-                    if self._is_key_file(file) and os.path.getsize(file_path) < 10000:
-                        try:
-                            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
-                                content = await f.read()
-                                context["key_files"][relative_path] = content[:5000]
-                        except:
-                            context["key_files"][relative_path] = "[binary or unreadable file]"
-            
-            return context
-            
-        except Exception as e:
-            print(f"Ошибка загрузки контекста проекта: {e}")
-            return context
-    
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        context["key_files"][relative_path] = f.read(5000)
+                except (OSError, UnicodeDecodeError):
+                    context["key_files"][relative_path] = "[binary or unreadable file]"
+        except OSError:
+            pass
+
+        return context
+
+    async def load_project_context(self, project_path: Optional[str] = None) -> Dict:
+        """Загрузка контекста проекта"""
+        project_path = os.path.abspath(project_path or os.getcwd())
+        return await asyncio.to_thread(self._collect_project_context, project_path)
+
+    _KEY_FILE_NAMES = {
+        'Dockerfile', 'docker-compose.yml', '.env.example', 'README.md',
+        'config.py', 'settings.py', 'package.json', 'requirements.txt',
+        'pyproject.toml', 'setup.py', 'Makefile', 'CMakeLists.txt'
+    }
+
     def _is_key_file(self, filename: str) -> bool:
         """Определение является ли файл ключевым для проекта"""
         key_extensions = {
-            '.py', '.js', '.ts', '.jsx', '.tsx', '.json', '.yaml', '.yml', 
+            '.py', '.js', '.ts', '.jsx', '.tsx', '.json', '.yaml', '.yml',
             '.md', '.txt', '.html', '.css', '.xml', '.java', '.cpp', '.h'
         }
-        key_files = {
-            'Dockerfile', 'docker-compose.yml', '.env.example', 'README.md', 
-            'config.py', 'settings.py', 'package.json', 'requirements.txt',
-            'pyproject.toml', 'setup.py', 'Makefile', 'CMakeLists.txt'
-        }
-        
+
         ext = os.path.splitext(filename)[1].lower()
-        return ext in key_extensions or filename in key_files
-    
-    async def get_code_analysis_stream(self, prompt: str, project_path: str = None) -> AsyncGenerator[StreamChunk, None]:
+        return ext in key_extensions or filename in self._KEY_FILE_NAMES
+
+    async def get_code_analysis_stream(self, prompt: str, project_path: Optional[str] = None) -> AsyncGenerator[StreamChunk, None]:
         """Потоковая версия анализа кода"""
         context = await self.load_project_context(project_path)
-        
-        system_message = """Ты - опытный разработчик-ассистент. Анализируй код проекта и давай конкретные, 
+
+        system_message = """Ты - опытный разработчик-ассистент. Анализируй код проекта и давай конкретные,
         практические советы. Фокусируйся на:
         1. Качестве кода и лучших практиках
         2. Возможных ошибках и уязвимостях
         3. Оптимизации производительности
         4. Архитектурных улучшениях
-        
+
         Будь конкретен и приводи примеры исправлений."""
-        
+
         file_structure = context.get("file_structure", [])
         key_files = context.get("key_files", {})
-        
+
         context_info = f"Структура проекта ({len(file_structure)} файлов):\n"
         context_info += "\n".join(file_structure[:25])
-        
+
         if len(file_structure) > 25:
             context_info += f"\n... и еще {len(file_structure) - 25} файлов"
-        
+
         context_info += "\n\n"
-        
+
         if key_files:
             context_info += "Ключевые файлы:\n"
-            key_files_items = list(key_files.items())[:5]
-            for file, content in key_files_items:
+            for file, content in key_files.items():
                 context_info += f"\n--- {file} ---\n{content[:1000]}\n"
-        
+
         full_prompt = f"{context_info}\n\nЗапрос: {prompt}"
-        
-        async for chunk in self.send_message_stream(full_prompt, system_message):
+
+        async for chunk in self.send_message_stream(full_prompt, system_message, history_prompt=prompt):
             yield chunk
 
-    async def get_answer_stream(self, prompt: str, clear_history: bool = False) -> AsyncGenerator[StreamChunk, None]:
+    @staticmethod
+    def _is_project_analysis_request(prompt: str) -> bool:
+        """Проверка что запрос касается анализа всего проекта"""
+        lower = prompt.lower()
+        mentions_project = 'проект' in lower or 'project' in lower
+        mentions_analysis = any(keyword in lower for keyword in ['анализ', 'структур', 'обзор', 'analy', 'structure', 'overview'])
+        return mentions_project and mentions_analysis
+
+    async def get_answer_stream(
+        self,
+        prompt: str,
+        clear_history: bool = False,
+        project_path: Optional[str] = None
+    ) -> AsyncGenerator[StreamChunk, None]:
         """Потоковая версия основного метода"""
         if clear_history:
-            self.conversation_history.clear()
-            self._last_files_context.clear()
-            self._last_user_messages.clear()
-            yield StreamChunk(content="История диалога очищена", is_final=True)
+            yield StreamChunk(content=self.clear_history(), is_final=True)
             return
-        
-        # Автоматическое определение типа запроса
-        if any(keyword in prompt.lower() for keyword in ['анализ', 'проект', 'project', 'структур']):
-            async for chunk in self.get_code_analysis_stream(prompt):
-                yield chunk
-            return
-        
-        elif any(keyword in prompt.lower() for keyword in ['объясни', 'explain', 'как работает']):
-            code_blocks = self._extract_code_blocks(prompt)
-            if code_blocks:
-                async for chunk in self.explain_code_stream(code_blocks[0], self._detect_language(prompt)):
+
+        lower = prompt.lower()
+        code_blocks = self._extract_code_blocks(prompt)
+
+        # Объяснение и рефакторинг кода, переданного прямо в запросе
+        if code_blocks:
+            language = self._detect_language(prompt)
+            if any(keyword in lower for keyword in ['объясни', 'explain', 'как работает']):
+                async for chunk in self.explain_code_stream(code_blocks[0], language):
                     yield chunk
                 return
-        
-        elif any(keyword in prompt.lower() for keyword in ['рефакторинг', 'refactor', 'улучши код']):
-            code_blocks = self._extract_code_blocks(prompt)
-            if code_blocks:
-                async for chunk in self.refactor_suggestion_stream(code_blocks[0], self._detect_language(prompt)):
+            if any(keyword in lower for keyword in ['рефакторинг', 'refactor', 'улучши код']):
+                async for chunk in self.refactor_suggestion_stream(code_blocks[0], language):
                     yield chunk
                 return
-        
+
         # Использование контекстного ответа для запросов с упоминанием файлов
-        elif self._extract_file_references(prompt):
-            async for chunk in self.get_contextual_answer_stream(prompt):
+        if self._extract_file_references(prompt):
+            async for chunk in self.get_contextual_answer_stream(prompt, project_path):
                 yield chunk
             return
-        
+
+        # Анализ структуры всего проекта
+        if self._is_project_analysis_request(prompt):
+            async for chunk in self.get_code_analysis_stream(prompt, project_path):
+                yield chunk
+            return
+
         # Стандартный запрос с полной историей диалога
         system_message = "Ты - полезный AI-ассистент для разработчиков."
         async for chunk in self.send_message_stream(prompt, system_message):
@@ -473,59 +481,58 @@ class GigaChatManager:
         2. Как он работает пошагово?
         3. Какие ключевые конструкции используются?
         4. Есть ли потенциальные проблемы?"""
-        
+
         full_prompt = f"Код для объяснения:\n```{language}\n{code}\n```"
-        
+
         async for chunk in self.send_message_stream(full_prompt, system_message):
             yield chunk
-    
+
     async def refactor_suggestion_stream(self, code: str, language: str = "python") -> AsyncGenerator[StreamChunk, None]:
         """Потоковые предложения по рефакторингу кода"""
         system_message = f"""Ты - senior разработчик. Проанализируй этот {language} код и предложи улучшения:
         1. Улучшение читаемости
-        2. Оптимизация производительности  
+        2. Оптимизация производительности
         3. Следование best practices
         4. Устранение code smells
-        
+
         Покажи конкретные примеры до/после."""
-        
+
         full_prompt = f"Код для рефакторинга:\n```{language}\n{code}\n```"
-        
+
         async for chunk in self.send_message_stream(full_prompt, system_message):
             yield chunk
 
     def _extract_code_blocks(self, text: str) -> List[str]:
-        """Извлечение блоков кода из текста"""
-        code_blocks = re.findall(r'```(?:\w+)?\n(.*?)\n```', text, re.DOTALL)
-        return code_blocks
+        """Извлечение блоков кода из текста (в том числе однострочных: ```код```)"""
+        blocks = re.findall(r'```(?:\w+\n)?(.*?)```', text, re.DOTALL)
+        return [block.strip() for block in blocks if block.strip()]
 
     def _detect_language(self, text: str) -> str:
         """Определение языка программирования из текста"""
-        if 'python' in text.lower() or '.py' in text:
+        lower = text.lower()
+        if re.search(r'\bpython\b|```py(?:thon)?\b|\.py\b', lower):
             return 'python'
-        elif 'javascript' in text.lower() or 'js' in text:
-            return 'javascript'
-        elif 'typescript' in text.lower() or 'ts' in text:
+        if re.search(r'\btypescript\b|```ts\b|\.ts\b|\bts\b', lower):
             return 'typescript'
-        else:
-            return 'python'
-    
+        if re.search(r'\bjavascript\b|```js\b|\.js\b|\bjs\b', lower):
+            return 'javascript'
+        return 'python'
+
     def clear_history(self) -> str:
         """Очистка истории диалога"""
         self.conversation_history.clear()
         self._last_files_context.clear()
-        self._last_user_messages.clear()
         return "История диалога очищена"
-    
+
     def get_current_model(self) -> str:
         """Получение текущей модели"""
         return self.config.get_model()
-    
+
     def get_conversation_stats(self) -> Dict:
         """Получение статистики текущей сессии"""
         user_messages = sum(1 for msg in self.conversation_history if isinstance(msg, HumanMessage))
         ai_messages = sum(1 for msg in self.conversation_history if isinstance(msg, AIMessage))
-        
+
         return {
             "total_messages": len(self.conversation_history),
             "user_messages": user_messages,
@@ -540,9 +547,13 @@ chat_manager = GigaChatManager()
 
 
 # Функции для обратной совместимости
-async def get_answer_stream(prompt: str, clear_history: bool = False) -> AsyncGenerator[StreamChunk, None]:
+async def get_answer_stream(
+    prompt: str,
+    clear_history: bool = False,
+    project_path: Optional[str] = None
+) -> AsyncGenerator[StreamChunk, None]:
     """Потоковая версия получения ответа"""
-    async for chunk in chat_manager.get_answer_stream(prompt, clear_history):
+    async for chunk in chat_manager.get_answer_stream(prompt, clear_history, project_path):
         yield chunk
 
 def clear_chat_history() -> str:
