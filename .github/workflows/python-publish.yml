@@ -62,7 +62,7 @@ jobs:
         with:
           packages-dir: dist/
 
-  # Дублирование релиза на GitVerse: пуш тега и master, создание релиза и загрузка дистрибутивов.
+  # Дублирование релиза на GitVerse: пуш тега, создание релиза и загрузка дистрибутивов.
   # Требуется секрет GITVERSE_TOKEN (токен GitVerse с доступом к репозиториям на запись)
   gitverse-release:
     runs-on: ubuntu-latest
@@ -81,7 +81,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push tag and master to GitVerse
+      # Тег пушится и здесь: релиз на GitVerse создается по тегу, и ждать workflow зеркалирования нельзя.
+      # Ветки зеркалирует mirror-gitverse.yml
+      - name: Push tag to GitVerse
         run: |
           if [ -z "$GITVERSE_TOKEN" ]; then
             echo "::error::Секрет GITVERSE_TOKEN не задан"
@@ -93,9 +95,6 @@ jobs:
           git remote add gitverse "https://gitverse.ru/$GITVERSE_REPO.git"
 
           git push gitverse "refs/tags/$TAG:refs/tags/$TAG"
-          # master не перезаписывается принудительно: если на GitVerse он разошелся с GitHub, нужно разобраться вручную
-          git push gitverse "refs/remotes/origin/master:refs/heads/master" \
-            || echo "::warning::Не удалось обновить master на GitVerse (ветки разошлись?)"
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
