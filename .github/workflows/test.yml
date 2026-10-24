@@ -1,0 +1,59 @@
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Lint
+        run: uv run --locked ruff check src tests
+
+  test:
+    name: Python ${{ matrix.python-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # Python 3.15: у части зависимостей (pydantic-core, pyyaml, zstandard) еще нет готовых wheel,
+    # поэтому сборка экспериментальная и не блокирует релиз
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.13", "3.14"]
+        experimental: [false]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.15"
+            experimental: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Полная история с тегами нужна setuptools-scm для вычисления версии пакета
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run --locked pytest
