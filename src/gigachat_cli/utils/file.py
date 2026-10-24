@@ -5,17 +5,22 @@ from typing import List, Tuple
 from gigachat_cli.utils.command import FILE_COMMANDS
 
 
-def split_path_argument(argument: str) -> Tuple[str, str]:
+# Разделители пути: обратный слеш - только на Windows, в POSIX это допустимый символ имени файла
+PATH_SEPARATORS = ('/', '\\') if os.name == 'nt' else ('/',)
+
+
+def split_path_argument(argument: str, separators: Tuple[str, ...] = PATH_SEPARATORS) -> Tuple[str, str]:
     """
     Разделение аргумента-пути на директорию (с завершающим разделителем) и имя
 
     Args:
         argument: Аргумент команды, например "src/gig" или "C:\\Users\\da"
+        separators: Разделители пути (по умолчанию - для текущей ОС)
 
     Returns:
         Tuple[str, str]: (директория, начало имени файла)
     """
-    separator_index = max(argument.rfind('/'), argument.rfind('\\'))
+    separator_index = max(argument.rfind(separator) for separator in separators)
     return argument[:separator_index + 1], argument[separator_index + 1:]
 
 

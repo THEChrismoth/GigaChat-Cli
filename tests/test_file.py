@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from gigachat_cli.utils.command import CommandUtils
@@ -43,20 +45,44 @@ def complete(file_utils, text):
     return files, field.value
 
 
+windows_only = pytest.mark.skipif(os.name != "nt", reason="Обратный слеш разделяет путь только на Windows")
+
+
 @pytest.mark.parametrize(
     ("argument", "expected"),
     [
         ("", ("", "")),
         ("mai", ("", "mai")),
         ("src/ma", ("src/", "ma")),
-        ("src\\ma", ("src\\", "ma")),
         ("/usr/lo", ("/usr/", "lo")),
-        ("C:\\Users\\", ("C:\\Users\\", "")),
-        ("a/b\\c", ("a/b\\", "c")),
     ],
 )
 def test_split_path_argument(argument, expected):
     assert split_path_argument(argument) == expected
+
+
+@pytest.mark.parametrize(
+    ("argument", "expected"),
+    [
+        ("src\\ma", ("src\\", "ma")),
+        ("C:\\Users\\", ("C:\\Users\\", "")),
+        ("a/b\\c", ("a/b\\", "c")),
+    ],
+)
+def test_split_path_argument_windows(argument, expected):
+    assert split_path_argument(argument, separators=("/", "\\")) == expected
+
+
+@pytest.mark.parametrize(
+    ("argument", "expected"),
+    [
+        ("src\\ma", ("", "src\\ma")),
+        ("a/b\\c", ("a/", "b\\c")),
+    ],
+)
+def test_split_path_argument_posix(argument, expected):
+    # В POSIX обратный слеш - часть имени файла
+    assert split_path_argument(argument, separators=("/",)) == expected
 
 
 @pytest.mark.parametrize(
@@ -85,13 +111,20 @@ def test_directories_listed_first(file_utils):
         ("!ls ", ["Scripts", "src", "setup.py"], "!ls Scripts"),
         ("!ls se", ["setup.py"], "!ls setup.py"),
         ("!cat src/m", ["main.py", "module.py"], "!cat src/main.py"),
-        ("!cat src\\mo", ["module.py"], "!cat src\\module.py"),
+        pytest.param("!cat src\\mo", ["module.py"], "!cat src\\module.py", marks=windows_only),
         ("!cp setup.py ", ["Scripts", "src", "setup.py"], "!cp setup.py Scripts"),
         ("!cp  setup.py  sr", ["src"], "!cp  setup.py  src"),
     ],
 )
 def test_completion(file_utils, text, files, result):
     assert complete(file_utils, text) == (files, result)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="На Windows обратный слеш недопустим в имени файла")
+def test_completion_backslash_in_file_name_posix(file_utils, tree):
+    (tree / "odd\\name.txt").write_text("", encoding="utf-8")
+
+    assert complete(file_utils, "!cat odd\\n") == (["odd\\name.txt"], "!cat odd\\name.txt")
 
 
 def test_completion_absolute_path(file_utils, tree):
