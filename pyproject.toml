@@ -14,10 +14,18 @@ dependencies = [
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Utilities",
     "Topic :: Terminals",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=1.0",
+    "ruff==0.17.2",
 ]
 
 [project.scripts]
@@ -39,3 +47,16 @@ package-dir = {"" = "src"}
 [tool.setuptools_scm]
 version_scheme = "release-branch-semver"
 local_scheme = "node-and-timestamp"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Базовый набор: синтаксические ошибки, неопределенные имена, неиспользуемые импорты
+select = ["E4", "E7", "E9", "F"]

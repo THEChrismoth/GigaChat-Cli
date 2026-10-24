@@ -1,7 +1,6 @@
 from textual.widgets import Static
 from textual.reactive import reactive
 from pathlib import Path
-import os
 
 from gigachat_cli.utils.file import split_path_argument
 
