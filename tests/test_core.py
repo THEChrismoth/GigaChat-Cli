@@ -132,6 +132,22 @@ def test_ssl_disabled_ignores_ca_bundle_in_sdk(monkeypatch, tmp_path):
     assert _get_kwargs(settings)["verify"] is False
 
 
+def test_sdk_models_work_on_current_python():
+    # Регрессия: на Python 3.14 с pydantic 2.12 модели SDK (pydantic.v1) не создаются:
+    # 'unable to infer type for attribute "x_headers"'
+    from gigachat.models import ChatCompletionChunk
+
+    chunk = ChatCompletionChunk.parse_obj({
+        "choices": [{"delta": {"content": "x", "role": "assistant"}, "index": 0}],
+        "created": 1,
+        "model": "GigaChat-2",
+        "object": "chat.completion",
+    })
+    chunk.x_headers = {"x-request-id": "1"}
+
+    assert chunk.x_headers == {"x-request-id": "1"}
+
+
 def test_missing_ca_bundle_file(monkeypatch, tmp_path):
     monkeypatch.setenv("GIGACHAT_CA_BUNDLE_FILE", str(tmp_path / "missing.cer"))
     with pytest.raises(Exception, match="GIGACHAT_CA_BUNDLE_FILE не найден"):

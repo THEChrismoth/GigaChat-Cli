@@ -9,6 +9,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "langchain-gigachat>=0.3.12",
+    # На Python 3.14 SDK GigaChat (pydantic.v1) с pydantic 2.12 падает с ошибкой
+    # 'unable to infer type for attribute "x_headers"'
+    "pydantic>=2.13; python_version >= '3.14'",
     "textual>=6.2.0",
 ]
 classifiers = [

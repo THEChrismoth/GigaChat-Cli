@@ -1,6 +1,10 @@
 version = 1
 revision = 3
 requires-python = ">=3.13"
+resolution-markers = [
+    "python_full_version >= '3.14'",
+    "python_full_version < '3.14'",
+]
 
 [[package]]
 name = "annotated-types"
@@ -91,6 +95,7 @@ name = "gigachat-cli"
 source = { editable = "." }
 dependencies = [
     { name = "langchain-gigachat" },
+    { name = "pydantic", marker = "python_full_version >= '3.14'" },
     { name = "textual" },
 ]
 
@@ -104,6 +109,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "langchain-gigachat", specifier = ">=0.3.12" },
+    { name = "pydantic", marker = "python_full_version >= '3.14'", specifier = ">=2.13" },
     { name = "textual", specifier = ">=6.2.0" },
 ]
 
