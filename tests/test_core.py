@@ -100,20 +100,42 @@ def test_is_project_analysis_request(text, expected):
 
 # --- Настройки SSL и клиент GigaChat ---
 
-@pytest.mark.parametrize(
-    ("verify", "expected"),
-    [
-        ("0", False),
-        (" False ", False),
-        ("NO", False),
-        ("off", False),
-        ("1", True),
-        ("true", True),
-    ],
-)
-def test_ssl_verify_env(monkeypatch, verify, expected):
+@pytest.mark.parametrize("verify", ["0", " False ", "NO", "off"])
+def test_ssl_verify_disabled(monkeypatch, verify):
     monkeypatch.setenv("GIGACHAT_SSL_VERIFY", verify)
-    assert core.GigaChatManager._get_ssl_settings() == {"verify_ssl_certs": expected}
+    assert core.GigaChatManager._get_ssl_settings() == {"verify_ssl_certs": False, "ca_bundle_file": ""}
+
+
+@pytest.mark.parametrize("verify", ["1", "true"])
+def test_ssl_verify_enabled(monkeypatch, verify):
+    monkeypatch.setenv("GIGACHAT_SSL_VERIFY", verify)
+    assert core.GigaChatManager._get_ssl_settings() == {"verify_ssl_certs": True}
+
+
+def test_ssl_disabled_overrides_ca_bundle(monkeypatch, tmp_path):
+    # Путь к сертификату (даже несуществующий) не должен включать проверку обратно
+    monkeypatch.setenv("GIGACHAT_SSL_VERIFY", "0")
+    monkeypatch.setenv("GIGACHAT_CA_BUNDLE_FILE", str(tmp_path / "missing.cer"))
+    assert core.GigaChatManager._get_ssl_settings() == {"verify_ssl_certs": False, "ca_bundle_file": ""}
+
+
+def test_ssl_disabled_ignores_ca_bundle_in_sdk(monkeypatch, tmp_path):
+    # Проверка на реальном SDK: он сам читает GIGACHAT_CA_BUNDLE_FILE из окружения
+    from gigachat.client import _get_kwargs
+    from gigachat.settings import Settings
+
+    monkeypatch.setenv("GIGACHAT_SSL_VERIFY", "0")
+    monkeypatch.setenv("GIGACHAT_CA_BUNDLE_FILE", str(tmp_path / "missing.cer"))
+
+    settings = Settings(**core.GigaChatManager._get_ssl_settings())
+
+    assert _get_kwargs(settings)["verify"] is False
+
+
+def test_missing_ca_bundle_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("GIGACHAT_CA_BUNDLE_FILE", str(tmp_path / "missing.cer"))
+    with pytest.raises(Exception, match="GIGACHAT_CA_BUNDLE_FILE не найден"):
+        core.GigaChatManager._get_ssl_settings()
 
 
 def test_ssl_settings_not_passed_by_default():
@@ -126,9 +148,11 @@ def test_ssl_empty_value_ignored(monkeypatch):
     assert core.GigaChatManager._get_ssl_settings() == {}
 
 
-def test_ca_bundle_env(monkeypatch):
-    monkeypatch.setenv("GIGACHAT_CA_BUNDLE_FILE", " /certs/ca.pem ")
-    assert core.GigaChatManager._get_ssl_settings() == {"ca_bundle_file": "/certs/ca.pem"}
+def test_ca_bundle_env(monkeypatch, tmp_path):
+    ca_file = tmp_path / "ca.pem"
+    ca_file.write_text("cert", encoding="utf-8")
+    monkeypatch.setenv("GIGACHAT_CA_BUNDLE_FILE", f" {ca_file} ")
+    assert core.GigaChatManager._get_ssl_settings() == {"ca_bundle_file": str(ca_file)}
 
 
 def test_giga_client_is_cached(manager, monkeypatch):

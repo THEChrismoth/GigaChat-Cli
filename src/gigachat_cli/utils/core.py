@@ -112,9 +112,19 @@ class GigaChatManager:
         verify = os.getenv("GIGACHAT_SSL_VERIFY")
         if verify is not None and verify.strip():
             settings["verify_ssl_certs"] = verify.strip().lower() not in _FALSE_VALUES
+
+        if settings.get("verify_ssl_certs") is False:
+            # SDK сам читает GIGACHAT_CA_BUNDLE_FILE, и путь к сертификату перекрывает verify=False.
+            # Пустая строка (не None - None SDK отбрасывает) отключает использование сертификата
+            settings["ca_bundle_file"] = ""
+            return settings
+
         ca_bundle = os.getenv("GIGACHAT_CA_BUNDLE_FILE")
         if ca_bundle and ca_bundle.strip():
-            settings["ca_bundle_file"] = ca_bundle.strip()
+            ca_bundle = ca_bundle.strip()
+            if not os.path.isfile(ca_bundle):
+                raise Exception(f"Файл сертификата из GIGACHAT_CA_BUNDLE_FILE не найден: {ca_bundle}")
+            settings["ca_bundle_file"] = ca_bundle
         return settings
 
     def _get_giga_chat_instance(self) -> GigaChat:
