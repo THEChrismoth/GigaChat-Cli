@@ -122,9 +122,10 @@ def test_completion(file_utils, text, files, result):
 
 @pytest.mark.skipif(os.name == "nt", reason="На Windows обратный слеш недопустим в имени файла")
 def test_completion_backslash_in_file_name_posix(file_utils, tree):
+    # Как в shell: обратный слеш в имени вводится удвоенным (odd\\n), одиночный экранирует символ
     (tree / "odd\\name.txt").write_text("", encoding="utf-8")
 
-    assert complete(file_utils, "!cat odd\\n") == (["odd\\name.txt"], "!cat odd\\name.txt")
+    assert complete(file_utils, "!cat odd\\\\n") == (["odd\\name.txt"], "!cat odd\\\\name.txt")
 
 
 @pytest.fixture

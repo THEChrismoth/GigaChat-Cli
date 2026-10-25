@@ -26,6 +26,8 @@ def values(text, posix):
         ('!cat "a \\"b\\" \\\\c \\d"', ["!cat", 'a "b" \\c \\d']),
         ("!cat 'a\\b'", ["!cat", "a\\b"]),
         ("!cat My\\ ", ["!cat", "My "]),
+        ("!cat odd\\\\n", ["!cat", "odd\\n"]),
+        ("!cat odd\\n", ["!cat", "oddn"]),
         # Незавершенный ввод не приводит к ошибке
         ("!cat 'My Do", ["!cat", "My Do"]),
         ('!cat "My Do', ["!cat", "My Do"]),
@@ -127,6 +129,8 @@ def test_quote_round_trip(posix, quote, value):
         ("!cat My\\ Docs/", "a b.txt", "!cat My\\ Docs/a\\ b.txt"),
         ("!cat 'My Docs'/a", "a b.txt", "!cat 'My Docs/a b.txt'"),
         ("!cp a.txt  sr", "src", "!cp a.txt  src"),
+        # Обратный слеш в имени файла: вводится удвоенным и так же подставляется
+        ("!cat odd\\\\n", "odd\\name.txt", "!cat odd\\\\name.txt"),
     ],
 )
 def test_complete_posix(text, name, expected):
