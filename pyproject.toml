@@ -8,19 +8,27 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "aiofiles>=25.1.0",
     "langchain-gigachat>=0.3.12",
-    "regex>=2025.9.18",
-    "setuptools-scm>=9.2.2",
+    # На Python 3.14 SDK GigaChat (pydantic.v1) с pydantic 2.12 падает с ошибкой
+    # 'unable to infer type for attribute "x_headers"'
+    "pydantic>=2.13; python_version >= '3.14'",
     "textual>=6.2.0",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Utilities",
     "Topic :: Terminals",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=1.0",
+    "ruff==0.17.2",
 ]
 
 [project.scripts]
@@ -42,3 +50,24 @@ package-dir = {"" = "src"}
 [tool.setuptools_scm]
 version_scheme = "release-branch-semver"
 local_scheme = "node-and-timestamp"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Базовый набор: синтаксические ошибки, неопределенные имена, неиспользуемые импорты.
+# D - docstring по PEP 257 в формате Google
+select = ["E4", "E7", "E9", "F", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# В тестах docstring не обязательны: назначение теста видно из его имени
+"tests/**" = ["D"]

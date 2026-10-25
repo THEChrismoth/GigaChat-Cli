@@ -1,30 +1,29 @@
+"""Строка состояния с текущей моделью GigaChat."""
+
 from textual.widgets import Static
 from gigachat_cli.utils.config import Config
 
 
 class Model(Static):
-    """Виджет отображения текущей модели GigaChat"""
-    
+    """Виджет отображения текущей модели GigaChat."""
+
     def __init__(self, *args, **kwargs):
-        """
-        Инициализация виджета модели
-        
+        """Создание виджета с моделью из конфигурации.
+
         Args:
-            *args: Аргументы родительского класса
-            **kwargs: Ключевые аргументы родительского класса
+            *args: Позиционные аргументы Static
+            **kwargs: Именованные аргументы Static
         """
         super().__init__(*args, **kwargs)
         config = Config()
         self.current_model = config.get_model()
-    
+
     def render(self) -> str:
-        """
-        Рендеринг текста с текущей моделью
-        
+        """Отрисовка названия модели.
+
         Returns:
-            str: Отформатированная строка с названием модели
+            str: Строка с читаемым названием модели
         """
-        # Сопоставление технических названий с читаемыми
         model_names = {
             "GigaChat-2": "GigaChat 2 Lite",
             "GigaChat-2-Pro": "GigaChat 2 Pro",

@@ -1,133 +1,315 @@
-# GigaChat CLI
+<h1 align="center">GigaChat CLI</h1>
 
-[![PyPI Version](https://img.shields.io/pypi/v/gigachat-cli.svg)](https://pypi.org/project/gigachat-cli/)
-[![PyPI - License](https://img.shields.io/pypi/l/gigachat-cli)](https://github.com/THEChrismoth/GigaChat-Cli/blob/master/LICENSE.md)
-[![Python Version](https://img.shields.io/pypi/pyversions/gigachat-cli)](https://pypi.org/project/gigachat-cli/)
+<p align="center">
+  <b>AI-ассистент для разработчиков в терминале на базе <a href="https://developers.sber.ru/gigachat">GigaChat</a></b>
+</p>
 
-Текстовый интерфейс для работы с GigaChat AI через командную строку с поддержкой терминальных команд и работы с файлами.
+<p align="center">
+  Чат с нейросетью, контекст файлов проекта, встроенный терминал и неинтерактивный режим для скриптов и CI
+</p>
 
-![GigaChat CLI Screenshot](https://github.com/THEChrismoth/GigaChat-Cli/blob/asset/gigachat_menu.jpg)
+<p align="center">
+  <a href="https://pypi.org/project/gigachat-cli/"><img src="https://img.shields.io/pypi/v/gigachat-cli.svg" alt="PyPI"></a>
+  <a href="https://pypi.org/project/gigachat-cli/"><img src="https://img.shields.io/pypi/pyversions/gigachat-cli.svg" alt="Python"></a>
+  <a href="https://github.com/THEChrismoth/GigaChat-Cli/actions/workflows/test.yml"><img src="https://github.com/THEChrismoth/GigaChat-Cli/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/THEChrismoth/GigaChat-Cli/blob/master/LICENSE.md"><img src="https://img.shields.io/pypi/l/gigachat-cli.svg" alt="License"></a>
+  <a href="https://gitverse.ru/THEChrismoth/GigaChat-Cli"><img src="https://img.shields.io/badge/GitVerse-mirror-blue.svg" alt="GitVerse"></a>
+</p>
 
-## Особенности
+<p align="center">
+  <a href="#возможности">Возможности</a> •
+  <a href="#установка">Установка</a> •
+  <a href="#настройка">Настройка</a> •
+  <a href="#использование">Использование</a> •
+  <a href="#неинтерактивный-режим">Неинтерактивный режим</a> •
+  <a href="#разработка">Разработка</a> •
+  <a href="#решение-проблем">Решение проблем</a>
+</p>
 
-- **Интуитивный текстовый интерфейс** - современный TUI на базе Textual
-- **Интерактивный чат** - общайтесь с GigaChat в реальном времени  
-- **Автодополнение команд** - умное автодополнение по Tab с описаниями
-- **Автодополнение файлов** - интеллектуальное дополнение путей для терминальных команд
-- **Выбор моделей** - переключайтесь между GigaChat 2 Lite/Pro/M
-- **Встроенный терминал** - выполняйте системные команды прямо из чата (префикс `!`)
-- **Анализ проекта** - нейросеть автоматически анализирует структуру и содержимое вашего проекта
-- **Работа с кодом** - объяснение, рефакторинг и анализ кода с учетом контекста проекта
-- **История диалога** - автоматическое сохранение контекста беседы
-- **Подсветка синтаксиса** - красивый вывод кода и терминальных команд
+<p align="center">
+  <img src="https://raw.githubusercontent.com/THEChrismoth/GigaChat-Cli/master/docs/images/chat.png" alt="Ответ GigaChat с учетом содержимого файла проекта" width="800">
+</p>
+
+## Возможности
+
+- 💬 **Чат с GigaChat** в терминале: ответ выводится по мере генерации, история диалога сохраняется
+- 📁 **Контекст проекта**: упомяните файл в запросе (`объясни main.py`) — его содержимое будет передано модели; запросы вида «покажи структуру проекта» анализируют весь проект
+- 🖥️ **Встроенный терминал**: команды с префиксом `!` (`!git status`, `!cd src`) выполняются прямо из чата
+- ⌨️ **Автодополнение** команд чата и путей к файлам, в том числе с пробелами в имени
+- 🔀 **Выбор модели**: GigaChat 2 Lite, Pro и Max
+- 🤖 **Неинтерактивный режим** для скриптов, конвейеров и CI: `gigachat -p "запрос"` с выводом в текст, JSON или JSON Lines
+- 🪟 **Linux, macOS и Windows**
 
 ## Установка
 
-### Установка из PyPI
-```
+Требуется Python 3.13 или новее.
+
+```bash
 pip install gigachat-cli
 ```
-### Установка из исходного кода
-```
-git clone https://github.com/thechrismoth/GigaChat-Cli.git
-cd gigachat_cli
-pip install .
-```
-## Настройка аутентификации
 
-### Получение API ключа
+Или в изолированном окружении (рекомендуется для утилит командной строки):
 
-1. Перейдите на [SberAI Developer Studio](https://developers.sber.ru/studio/login)
-2. Зарегистрируйтесь или войдите в аккаунт
-3. Создайте новый API ключ
+```bash
+uv tool install gigachat-cli
+# или
+pipx install gigachat-cli
+```
 
-### Настройка переменной окружения
-```
-export GIGACHAT_API_KEY="ваш_api_ключ_здесь"
-```
-Для постоянного хранения добавьте в ваш ~/.bashrc, ~/.zshrc или ~/.profile:
-```
-echo 'export GIGACHAT_API_KEY="ваш_api_ключ_здесь"' >> ~/.bashrc
-```
-## Начало работы
+<details>
+<summary>Установка из исходного кода</summary>
 
-### Запуск приложения
+```bash
+git clone https://github.com/THEChrismoth/GigaChat-Cli.git
+cd GigaChat-Cli
+uv sync
+uv run gigachat
 ```
+
+</details>
+
+## Настройка
+
+### Ключ API
+
+1. Войдите в [личный кабинет GigaChat API](https://developers.sber.ru/studio/login)
+2. Создайте проект GigaChat API и получите ключ авторизации
+3. Сохраните ключ в переменной окружения `GIGACHAT_API_KEY`:
+
+**Linux и macOS**
+
+```bash
+export GIGACHAT_API_KEY="ваш_ключ"
+# чтобы не вводить каждый раз:
+echo 'export GIGACHAT_API_KEY="ваш_ключ"' >> ~/.bashrc
+```
+
+**Windows (PowerShell)**
+
+```powershell
+$env:GIGACHAT_API_KEY = "ваш_ключ"          # для текущего окна
+setx GIGACHAT_API_KEY "ваш_ключ"            # насовсем (для новых окон)
+```
+
+> **Важно:** `setx` действует только для программ, запущенных после него. Перезапустите терминал или редактор (Zed, VS Code, PyCharm) целиком.
+
+### SSL-сертификат
+
+Сервисы GigaChat используют сертификат, подписанный [корневым сертификатом Минцифры](https://www.gosuslugi.ru/crt), которого нет в стандартных хранилищах. Если запросы завершаются ошибкой `CERTIFICATE_VERIFY_FAILED`, скачайте сертификат и укажите путь к нему:
+
+```bash
+export GIGACHAT_CA_BUNDLE_FILE="/path/to/russian_trusted_root_ca.cer"
+```
+
+Сертификат должен быть в текстовом формате PEM (начинается со строки `-----BEGIN CERTIFICATE-----`).
+
+### Переменные окружения
+
+| Переменная | Назначение |
+|---|---|
+| `GIGACHAT_API_KEY` | Ключ авторизации GigaChat API (обязательно) |
+| `GIGACHAT_CA_BUNDLE_FILE` | Путь к корневому сертификату Минцифры (PEM) |
+| `GIGACHAT_SSL_VERIFY` | `0`, `false`, `no` или `off` отключает проверку сертификата (небезопасно) |
+
+Если `GIGACHAT_SSL_VERIFY` не задана, учитываются стандартные переменные SDK GigaChat (например, `GIGACHAT_VERIFY_SSL_CERTS`).
+Выбранная модель хранится в `~/.gigachat/config.json`.
+
+## Использование
+
+```bash
 gigachat
 ```
-### Основное использование
 
-1. **Запустите приложение** - введите команду gigachat
-2. **Выберите "Начать чат"** - из главного меню
-3. **Введите сообщение** - пишите вопросы и нажимайте Enter для отправки
-4. **Используйте терминальные команды** - начинайте команды с `!` (например: `!ls -la`)
-5. **Используйте автодополнение** - начните вводить / и используйте Tab для навигации
-6. *Переключайте модели** - команда `/model` для выбора между **Lite/Pro/Max**
-7. **Анализируйте проект** - просто упомяните файлы в запросе, нейросеть автоматически их найдет
-8. **Выход** - введите `/exit` чтобы закончить работу приложения
+В меню выберите «Начать использование» и задавайте вопросы.
 
-![GigaChat CLI Screenshot](https://github.com/THEChrismoth/GigaChat-Cli/blob/asset/gigachat_work.jpg)
+### Команды чата
 
-## Доступные команды
+| Команда | Действие |
+|---|---|
+| `/model` | Выбор модели: GigaChat 2 Lite, Pro или Max |
+| `/help` | Краткая справка |
+| `/menu` | Возврат в меню |
+| `/exit` | Выход из приложения |
+| `!команда` | Выполнение команды в терминале |
 
-- **/model** - выбор модели GigaChat (Lite/Pro/Max)
-- **/help** - показать справку по командам
-- **/exit** - выход из приложения
-- **/menu** - возврат в меню приложения
+### Управление
 
-## Управление интерфейсом
-
-- **Tab** / **Shift+Tab** - навигация по автодополнению команд
-- **↑** / **↓** - навигация в выпадающих списках (селекторах)
-- **Enter** - подтвердить выбор / отправить сообщение
-- **Escape** - отмена / возврат / закрытие справки
-
-## Примеры использования
-
-### Базовый чат
-
-Просто введите ваш вопрос и нажмите Shift+Enter
-
-### Терминальные команды
-
-- `!pwd` - показать текущую директорию
-- `!python --version` - проверить версию Python  
-- `!git status` - проверить статус git репозитория
+| Клавиша | Действие |
+|---|---|
+| `Enter` | Отправить сообщение / подтвердить выбор |
+| `Tab` / `Shift+Tab` | Перемещение по автодополнению |
+| `↑` / `↓` | Перемещение по списку выбора |
+| `Esc` | Отмена выбора, прерывание запроса или команды, закрытие справки |
 
 ### Работа с проектом
 
-- `Объясни что делает main.py` - автоматически найдет и проанализирует файл
-- `Как улучшить код в utils.py?` - анализ и предложения по улучшению
-- `Покажи структуру проекта` - анализ всей файловой структуры
-- `Рефакторинг функции calculate()` - поиск и улучшение конкретной функции
+Файлы и структура проекта берутся из текущей директории чата — она показана в строке состояния и меняется командой `!cd`.
 
+| Запрос | Что происходит |
+|---|---|
+| `Объясни что делает main.py` | Файл ищется в проекте, его содержимое передается модели |
+| `Как улучшить код в src/utils/core.py?` | То же для относительного пути |
+| `Покажи структуру проекта` | Модель получает список файлов и начало ключевых файлов |
+| ```` Объясни ```print(sum(range(10)))``` ```` | Объяснение кода прямо из запроса (также «рефакторинг») |
 
-### Переключение моделей
-- `/model` - открывает интерактивный выбор моделей
+В модель передаются только файлы с известными расширениями (`.py`, `.js`, `.ts`, `.md`, `.json`, `.toml` и др.) размером до 15 КБ. Служебные директории (`.git`, `node_modules`, `venv`) и скрытые файлы не учитываются.
 
-## Требования
+### Терминальные команды
 
-- Python >= 3.13
-- GigaChat API ключ
+Сообщение, начинающееся с `!`, выполняется как команда системы:
 
-## Зависимости
+```text
+!git status
+!ls -la
+!cd "My Projects"/app
+```
 
-- textual >= 6.2.0 - фреймворк для TUI приложений
-- langchain-gigachat >= 0.3.12 - интеграция с GigaChat
-- asyncio >= 4.0.0 - асинхронное программирование
+- Для `cd`, `ls`, `cat`, `cp`, `mv` и других файловых команд работает автодополнение путей (`Tab`), в том числе для имен с пробелами: подставляется `My\ Docs` в Linux и macOS или `"My Docs"` в Windows
+- Ввод с клавиатуры командам недоступен, время выполнения ограничено 60 секундами, `Esc` прерывает команду
+- В Windows команды выполняются через `cmd.exe` (доступны `dir`, `type` и другие встроенные команды)
+
+### Скриншоты
+
+<table>
+  <tr>
+    <td align="center"><img src="https://raw.githubusercontent.com/THEChrismoth/GigaChat-Cli/master/docs/images/menu.png" alt="Главное меню" width="400"><br>Главное меню</td>
+    <td align="center"><img src="https://raw.githubusercontent.com/THEChrismoth/GigaChat-Cli/master/docs/images/autocomplete.png" alt="Автодополнение путей" width="400"><br>Автодополнение путей</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="https://raw.githubusercontent.com/THEChrismoth/GigaChat-Cli/master/docs/images/terminal.png" alt="Терминальная команда" width="400"><br>Терминальная команда</td>
+    <td align="center"><img src="https://raw.githubusercontent.com/THEChrismoth/GigaChat-Cli/master/docs/images/model.png" alt="Выбор модели" width="400"><br>Выбор модели</td>
+  </tr>
+</table>
+
+## Неинтерактивный режим
+
+Один запрос без интерфейса — для скриптов, конвейеров и CI:
+
+```bash
+gigachat -p "Объясни что делает main.py"
+git diff | gigachat -p "Напиши commit message"
+gigachat -p "Покажи структуру проекта" --output-format json
+gigachat -p "Сравни подходы" --model GigaChat-2-Max
+```
+
+| Параметр | Описание |
+|---|---|
+| `-p`, `--print [PROMPT]` | Запрос. Данные из stdin добавляются к нему; без `PROMPT` запросом считается stdin |
+| `--output-format text` | Только ответ, по мере генерации; ошибки — в stderr (по умолчанию) |
+| `--output-format json` | Один JSON-объект с результатом |
+| `--output-format stream-json` | События [JSON Lines](https://jsonlines.org/) по мере генерации |
+| `--model MODEL` | Модель на этот запуск, без сохранения в настройках |
+| `--version`, `--help` | Версия и справка |
+
+Пример `--output-format json`:
+
+```json
+{
+  "type": "result",
+  "is_error": false,
+  "result": "GigaChat — это нейросетевая модель, разработанная SberAI, способная понимать и генерировать естественный язык...",
+  "error": null,
+  "model": "GigaChat-2",
+  "files": [],
+  "duration_ms": 2497
+}
+```
+
+При `--output-format stream-json` выводится событие `start`, затем `chunk` на каждую часть ответа и в конце `result` с теми же полями:
+
+```json
+{"type": "start", "model": "GigaChat-2"}
+{"type": "chunk", "content": "GigaChat — это"}
+{"type": "chunk", "content": " нейросетевая модель..."}
+{"type": "result", "is_error": false, "result": "GigaChat — это нейросетевая модель...", "error": null, "model": "GigaChat-2", "files": [], "duration_ms": 2497}
+```
+
+Коды возврата: `0` — успех, `1` — ошибка API, `2` — неверные аргументы или пустой запрос, `130` — прервано (`Ctrl+C`). Вывод всегда в UTF-8.
+
+## Разработка
+
+Нужен [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone https://github.com/THEChrismoth/GigaChat-Cli.git
+cd GigaChat-Cli
+uv sync                        # окружение и зависимости, включая dev
+uv run gigachat                # запуск из исходников
+uv run pytest                  # тесты
+uv run ruff check src tests    # линтер
+```
+
+- Тесты не обращаются к GigaChat API: клиент подменяется заглушкой, интерфейс проверяется через `App.run_test()` Textual
+- Комментарии и docstring пишутся на русском, docstring — по PEP 257 в формате Google (проверяется ruff)
+
+<details>
+<summary>Структура проекта</summary>
+
+```text
+src/gigachat_cli/
+├── __main__.py          # точка входа: TUI или неинтерактивный режим
+├── cli.py               # неинтерактивный режим (gigachat -p)
+├── main.py              # приложение Textual
+├── screens/             # экраны: меню, чат, справка
+├── handler/             # обработчики /help, /model и !команд
+├── widgets/             # виджеты интерфейса
+├── styles/              # CSS экранов
+└── utils/
+    ├── core.py          # запросы к GigaChat, история, контекст файлов
+    ├── command.py       # разбор и выполнение терминальных команд
+    ├── file.py          # автодополнение путей
+    └── config.py        # настройки (~/.gigachat/config.json)
+```
+
+</details>
+
+### CI/CD
+
+- **Tests** — ruff и pytest на Linux, Windows и macOS для Python 3.13 и 3.14 (и экспериментально 3.15) при каждом push и pull request
+- **Upload Python Package** — при публикации релиза на GitHub пакет собирается и публикуется в PyPI только после успешных тестов; релиз дублируется на GitVerse
+- **Mirror to GitVerse** — ветки и теги автоматически повторяются в [зеркале на GitVerse](https://gitverse.ru/THEChrismoth/GigaChat-Cli)
+
+Разработка ведется на GitHub: issues и pull requests принимаются [там](https://github.com/THEChrismoth/GigaChat-Cli/issues).
+
+## Решение проблем
+
+<details>
+<summary><code>GIGACHAT_API_KEY не установлен</code></summary>
+
+Задайте переменную окружения (см. [Ключ API](#ключ-api)). После `setx` в Windows перезапустите терминал или редактор. Проверить, что переменная видна:
+
+```powershell
+$env:GIGACHAT_API_KEY    # PowerShell
+echo $GIGACHAT_API_KEY   # bash/zsh
+```
+
+</details>
+
+<details>
+<summary><code>CERTIFICATE_VERIFY_FAILED</code></summary>
+
+Укажите путь к корневому сертификату Минцифры в `GIGACHAT_CA_BUNDLE_FILE` (см. [SSL-сертификат](#ssl-сертификат)). Если указанного файла нет, приложение сообщит об этом отдельной ошибкой. Временно проверку можно отключить: `GIGACHAT_SSL_VERIFY=0`.
+
+</details>
+
+<details>
+<summary><code>unable to infer type for attribute "x_headers"</code></summary>
+
+Ошибка SDK GigaChat на Python 3.14 со старой версией pydantic. Обновите пакет — он требует pydantic 2.13 или новее:
+
+```bash
+pip install -U gigachat-cli
+```
+
+</details>
+
+<details>
+<summary>Команда <code>gigachat</code> запускает старую версию</summary>
+
+Проверьте, нет ли второй установки (например, через `pipx` или в системном Python): `pipx list`, `pip show gigachat-cli`. При разработке запускайте приложение через `uv run gigachat`.
+
+</details>
 
 ## Лицензия
 
-MIT License - смотрите файл [LICENSE.md](LICENSE.md) для деталей.
-
-## Поддержка
-
-Если вы столкнулись с проблемами или у вас есть предложения:
-
-1. Создайте issue в репозитории
-2. Убедитесь что GIGACHAT_API_KEY корректно установлен
-3. Проверьте что Python версии 3.13 или выше
-
----
-
-**GigaChat CLI** - мощный инструмент для разработчиков, сочетающий возможности AI-ассистента с удобством командной строки.
+[MIT](https://github.com/THEChrismoth/GigaChat-Cli/blob/master/LICENSE.md)

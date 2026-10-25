@@ -1,0 +1,81 @@
+# Зеркалирование репозитория на GitVerse.
+# GitHub - основной репозиторий: все изменения (в том числе слияние PR) пушатся сюда,
+# а ветки и теги автоматически повторяются на GitVerse.
+# Требуется секрет GITVERSE_TOKEN (токен GitVerse с доступом к репозиториям на запись).
+
+name: Mirror to GitVerse
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  delete:
+
+permissions:
+  contents: read
+
+# Пуши одной ветки применяются строго по очереди
+concurrency:
+  group: mirror-gitverse-${{ github.event.ref || github.ref }}
+  cancel-in-progress: false
+
+env:
+  GITVERSE_REPO: THEChrismoth/GigaChat-Cli
+  GITVERSE_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    # Удаление ветки через push обрабатывается событием delete
+    if: github.event_name == 'delete' || !github.event.deleted
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure GitVerse remote
+        run: |
+          if [ -z "$GITVERSE_TOKEN" ]; then
+            echo "::error::Секрет GITVERSE_TOKEN не задан"
+            exit 1
+          fi
+          auth=$(printf '%s:%s' "${GITVERSE_REPO%%/*}" "$GITVERSE_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git config --local http.https://gitverse.ru/.extraheader "Authorization: Basic $auth"
+          git remote add gitverse "https://gitverse.ru/$GITVERSE_REPO.git"
+
+      - name: Push ref
+        if: github.event_name == 'push'
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            # Тег пушится по имени, а не по SHA коммита, чтобы сохранить аннотацию.
+            # Теги не перезаписываются принудительно
+            git push gitverse "$GITHUB_REF:$GITHUB_REF"
+          elif [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+            # Основная ветка не перезаписывается принудительно:
+            # если на GitVerse она разошлась с GitHub, нужно разобраться вручную
+            git push gitverse "$GITHUB_SHA:$GITHUB_REF"
+          else
+            # Рабочие ветки повторяют GitHub, в том числе после rebase и force-push
+            git push --force gitverse "$GITHUB_SHA:$GITHUB_REF"
+          fi
+
+      - name: Delete ref
+        if: github.event_name == 'delete'
+        env:
+          REF_NAME: ${{ github.event.ref }}
+          REF_TYPE: ${{ github.event.ref_type }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            ref="refs/tags/$REF_NAME"
+          else
+            ref="refs/heads/$REF_NAME"
+          fi
+          if git ls-remote --exit-code gitverse "$ref" > /dev/null; then
+            git push gitverse --delete "$ref"
+          else
+            echo "$ref уже отсутствует на GitVerse"
+          fi
