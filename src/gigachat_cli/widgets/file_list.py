@@ -1,3 +1,5 @@
+"""Выпадающий список автодополнения файлов для терминальных команд."""
+
 from textual.widgets import Static
 from textual.reactive import reactive
 from pathlib import Path
@@ -6,25 +8,24 @@ from gigachat_cli.utils.file import complete_path_argument
 
 
 class FileList(Static):
-    """Виджет автодополнения файлов"""
-    
-    can_focus = False 
-    
+    """Виджет автодополнения файлов с иконками и прокруткой."""
+
+    can_focus = False
+
     files = reactive([])
     selected_index = reactive(0)
-    current_command = ""  # Сохранение полной команды
-    current_path = ""     # Текущий путь для автодополнения
-    visible_start = 0     # Начало видимой области
+    current_command = ""  # Текст команды, для которой подобраны файлы
+    current_path = ""     # Директория, в которой искались файлы
+    visible_start = 0     # Индекс первого видимого файла
     visible_count = 5     # Количество файлов, показываемых одновременно
-    
+
     def update_files(self, files: list[str], current_command: str, current_path: str) -> None:
-        """
-        Обновление списка файлов для автодополнения
-        
+        """Обновление списка файлов; пустой список скрывает виджет.
+
         Args:
-            files: Список файлов для отображения
-            current_command: Текущая команда из поля ввода
-            current_path: Текущий путь для автодополнения
+            files: Имена файлов и директорий
+            current_command: Текст команды из поля ввода
+            current_path: Директория, в которой искались файлы
         """
         if files:
             self.files = files
@@ -37,28 +38,25 @@ class FileList(Static):
         else:
             self.add_class("hidden")
             self.files = []
-    
+
     def _update_display(self) -> None:
-        """Обновление отображения списка файлов"""
+        """Отрисовка видимой части списка с выделением выбранного файла."""
         if not self.files:
             return
-            
-        # Определение видимого диапазона файлов
+
         visible_files = self.files[self.visible_start:self.visible_start + self.visible_count]
-        
+
         formatted_files = []
         for i, file_name in enumerate(visible_files):
             actual_index = self.visible_start + i
-            
-            # Получение полного пути для проверки типа
+
             full_path = Path(self.current_path) / file_name
             is_dir = full_path.is_dir()
-            
-            # Форматирование отображения с иконками
+
             icon = "📁" if is_dir else "📄"
             line = f"{icon} {file_name}"
-            
-            # Показ индикатора прокрутки если есть больше файлов
+
+            # У выбранного файла показывается позиция, если список не помещается целиком
             if actual_index == self.selected_index:
                 if len(self.files) > self.visible_count:
                     line = f"➤ {line} [{actual_index + 1}/{len(self.files)}]"
@@ -66,54 +64,51 @@ class FileList(Static):
                     line = f"➤ {line}"
             else:
                 line = f"  {line}"
-            
+
             formatted_files.append(line)
-        
+
         self.update("\n".join(formatted_files))
-    
+
     def select_next(self) -> None:
-        """Выбор следующего файла в списке"""
+        """Выбор следующего файла (после последнего - переход к первому)."""
         if self.files:
             self.selected_index = (self.selected_index + 1) % len(self.files)
-            # Прокрутка если вышли за границы видимой области
+            # Прокрутка, чтобы выбранный файл оставался видимым
             if self.selected_index >= self.visible_start + self.visible_count:
                 self.visible_start += 1
             elif self.selected_index < self.visible_start:
                 self.visible_start = self.selected_index
             self._update_display()
-    
+
     def select_previous(self) -> None:
-        """Выбор предыдущего файла в списке"""
+        """Выбор предыдущего файла (перед первым - переход к последнему)."""
         if self.files:
             self.selected_index = (self.selected_index - 1) % len(self.files)
-            # Прокрутка если вышли за границы видимой области
+            # Прокрутка, чтобы выбранный файл оставался видимым
             if self.selected_index < self.visible_start:
                 self.visible_start -= 1
             elif self.selected_index >= self.visible_start + self.visible_count:
                 self.visible_start = self.selected_index - self.visible_count + 1
             self._update_display()
-    
+
     def get_selected_file(self) -> str:
-        """
-        Получение выбранного файла
-        
+        """Получение выбранного файла.
+
         Returns:
-            str: Выбранное имя файла или пустая строка
+            str: Имя выбранного файла или пустая строка
         """
         if self.files and 0 <= self.selected_index < len(self.files):
             return self.files[self.selected_index]
         return ""
-    
+
     def apply_selection(self, input_field) -> None:
-        """
-        Применение выбранного файла к полю ввода
-        
+        """Подстановка выбранного файла в поле ввода с экранированием пробелов и спецсимволов.
+
         Args:
             input_field: Поле ввода для обновления
         """
         selected_file = self.get_selected_file()
         if selected_file and self.current_command:
-            # Замена последнего аргумента с экранированием пробелов и спецсимволов
             new_text = complete_path_argument(self.current_command, selected_file)
 
             input_field.value = new_text

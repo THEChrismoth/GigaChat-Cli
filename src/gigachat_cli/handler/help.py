@@ -1,22 +1,22 @@
+"""Обработчик команды /help: краткая справка в чате."""
+
 from textual.widgets import Input
 
 
 class HelpHandler:
-    """Обработчик команды /help"""
-    
+    """Обработчик команды /help."""
+
     async def handle(self, user_text: str, input_field: Input, screen) -> bool:
-        """
-        Обработка команды помощи
-        
+        """Вывод справки по командам в чат.
+
         Args:
             user_text: Текст сообщения пользователя
-            input_field: Поле ввода для очистки
-            screen: Экран чата для обновления отображения
-            
+            input_field: Поле ввода
+            screen: Экран чата
+
         Returns:
-            bool: True если команда обработана, False если нет
+            bool: True, если команда обработана
         """
-        # Проверка что это команда /help
         if user_text.strip() != '/help':
             return False
 

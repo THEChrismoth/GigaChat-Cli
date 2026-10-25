@@ -1,3 +1,5 @@
+"""Терминальные команды: разбор командной строки, экранирование аргументов и выполнение."""
+
 import asyncio
 import shlex
 import os
@@ -14,15 +16,15 @@ POSIX_PARSING = not IS_WINDOWS
 
 @dataclass
 class CommandArgument:
-    """Аргумент командной строки"""
+    """Аргумент командной строки."""
+
     start: int                    # Позиция начала аргумента в исходной строке
     value: str                    # Значение без кавычек и экранирования
     quote: Optional[str] = None   # Кавычка, которой открыт аргумент (если есть)
 
 
 def split_command_arguments(text: str, posix: bool = POSIX_PARSING) -> List[CommandArgument]:
-    """
-    Разбор командной строки на аргументы с учетом кавычек и экранирования
+    r"""Разбор командной строки на аргументы с учетом кавычек и экранирования.
 
     В отличие от shlex.split не завершается ошибкой на незакрытой кавычке или
     завершающем обратном слеше: строка разбирается в процессе ввода.
@@ -31,7 +33,7 @@ def split_command_arguments(text: str, posix: bool = POSIX_PARSING) -> List[Comm
 
     Args:
         text: Командная строка
-        posix: Правила POSIX-shell (кавычки ' и ", экранирование \\)
+        posix: Правила POSIX-shell (кавычки ' и ", экранирование \)
             или cmd.exe (только кавычки ", обратный слеш - обычный символ)
 
     Returns:
@@ -68,6 +70,7 @@ def split_command_arguments(text: str, posix: bool = POSIX_PARSING) -> List[Comm
         elif char == quote:
             quote = None
         elif posix and quote == '"' and char == '\\' and text[index + 1:index + 2] in ('\\', '"', '$', '`'):
+            # Внутри двойных кавычек POSIX-shell экранирует только \ " $ `
             index += 1
             current.value += text[index]
         else:
@@ -89,8 +92,7 @@ _CMD_SPECIAL_CHARS = set(' \t&()[]{}^=;!\'+,`')
 
 
 def quote_command_argument(value: str, quote: Optional[str] = None, posix: bool = POSIX_PARSING) -> str:
-    """
-    Экранирование аргумента для командной строки
+    """Экранирование аргумента для командной строки.
 
     Args:
         value: Значение аргумента
@@ -112,14 +114,25 @@ def quote_command_argument(value: str, quote: Optional[str] = None, posix: bool 
         return f'"{escaped}"'
     return ''.join('\\' + char if char in _POSIX_SPECIAL_CHARS else char for char in value)
 
-# Список команд, работающих с файловой системой
+
+# Команды, работающие с файлами: для их аргументов показывается автодополнение путей
 FILE_COMMANDS = ['cd', 'ls', 'cp', 'mv', 'rm', 'mkdir', 'cat', 'touch', 'find', 'grep']
 if IS_WINDOWS:
     FILE_COMMANDS += ['dir', 'type', 'copy', 'move', 'del', 'rmdir', 'md']
 
 
 def _decode_output(data: bytes) -> str:
-    """Декодирование вывода команды (cmd.exe на Windows пишет в OEM-кодировке)"""
+    """Декодирование вывода команды.
+
+    Вывод читается как UTF-8; на Windows при ошибке - в OEM-кодировке консоли,
+    в которой пишут cmd.exe и встроенные команды.
+
+    Args:
+        data: Байты вывода команды
+
+    Returns:
+        str: Текст вывода
+    """
     try:
         return data.decode('utf-8')
     except UnicodeDecodeError:
@@ -130,38 +143,51 @@ def _decode_output(data: bytes) -> str:
 
 
 class CommandUtils:
-    """Утилита для выполнения системных команд и работы с файловой системой"""
+    """Выполнение терминальных команд в текущей директории чата.
+
+    Текущая директория хранится здесь, а не в процессе: ее меняет !cd,
+    и от нее же зависят поиск файлов и анализ проекта.
+    """
 
     def __init__(self, command_timeout: float = 60):
-        """Инициализация утилиты команд"""
+        """Создание утилиты с текущей директорией процесса.
+
+        Args:
+            command_timeout: Ограничение времени выполнения команды, в секундах
+        """
         self.current_directory = Path.cwd()
         self.command_timeout = command_timeout
         self.file_commands = FILE_COMMANDS
-    
+
     async def execute_system_command(self, command: str) -> Tuple[bool, str, int]:
-        """
-        Выполнение системной команды и возврат результата
-        
+        r"""Выполнение команды в текущей директории.
+
+        На Windows команда выполняется через cmd.exe (доступны dir, type и пути с \),
+        в остальных ОС - напрямую, без shell. Ввод с клавиатуры недоступен,
+        время выполнения ограничено, при отмене задачи процесс завершается.
+
         Args:
-            command: Строка команды для выполнения
-            
+            command: Команда без префикса !
+
         Returns:
-            Tuple[bool, str, int]: (успех, вывод, код возврата)
+            Tuple[bool, str, int]: (успех, вывод stdout и stderr, код возврата)
+
+        Raises:
+            asyncio.CancelledError: Выполнение отменено (процесс при этом завершается)
         """
         if not command.strip():
             return False, "Пустая команда", 1
-        
+
         stripped = command.strip()
         program = stripped.split()[0]
 
         try:
-            # Обрабатываем команду cd отдельно
+            # cd меняет директорию чата, а не дочернего процесса
             if stripped == 'cd' or stripped.startswith(('cd ', 'cd\t')):
                 return await self._handle_cd_command(stripped)
 
             # stdin закрыт, чтобы интерактивные команды не перехватывали терминал TUI
             if IS_WINDOWS:
-                # Через cmd.exe доступны встроенные команды (dir, type) и пути с обратными слешами
                 process = await asyncio.create_subprocess_shell(
                     stripped,
                     stdin=asyncio.subprocess.DEVNULL,
@@ -170,7 +196,6 @@ class CommandUtils:
                     cwd=self.current_directory
                 )
             else:
-                # Разбираем команду с поддержкой флагов
                 args = shlex.split(stripped)
                 if not args:
                     return False, "Не удалось разобрать команду", 1
@@ -184,7 +209,6 @@ class CommandUtils:
                     cwd=self.current_directory
                 )
 
-            # Читаем вывод команды с ограничением по времени
             try:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.command_timeout)
             except asyncio.TimeoutError:
@@ -195,7 +219,6 @@ class CommandUtils:
                 raise
             return_code = process.returncode
 
-            # Формируем результат выполнения
             output_lines = []
 
             if stdout:
@@ -211,6 +234,7 @@ class CommandUtils:
         except FileNotFoundError:
             return False, f"Команда '{program}' не найдена", 1
         except ValueError as e:
+            # shlex.split: незакрытая кавычка
             return False, f"Не удалось разобрать команду: {e}", 1
         except asyncio.CancelledError:
             raise
@@ -219,7 +243,11 @@ class CommandUtils:
 
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
-        """Принудительное завершение процесса"""
+        """Принудительное завершение процесса вместе с дочерними (на Windows).
+
+        Args:
+            process: Запущенный процесс
+        """
         if process.returncode is None:
             try:
                 if IS_WINDOWS:
@@ -235,14 +263,16 @@ class CommandUtils:
             except ProcessLookupError:
                 pass
             await process.wait()
-    
+
     async def _handle_cd_command(self, command: str) -> Tuple[bool, str, int]:
-        """
-        Обработка команды смены директории
-        
+        """Смена текущей директории чата.
+
+        Поддерживаются относительные и абсолютные пути, ~ и cd без аргументов
+        (переход в домашнюю директорию).
+
         Args:
-            command: Команда cd с аргументами
-            
+            command: Команда cd с аргументом
+
         Returns:
             Tuple[bool, str, int]: (успех, сообщение, код возврата)
         """
@@ -250,86 +280,77 @@ class CommandUtils:
             # Те же правила разбора, что и при автодополнении: "My Docs", My\ Docs, "My Docs"/sub
             args = [argument.value for argument in split_command_arguments(command)]
 
-            # cd без аргументов - переход в домашнюю директорию
             target_dir = args[1] if len(args) > 1 else "~"
 
-            # Раскрываем ~ и делаем относительный путь абсолютным относительно текущей директории
             target_path = Path(os.path.expanduser(target_dir))
             if not target_path.is_absolute():
                 target_path = self.current_directory / target_path
 
-            # Разрешаем путь (обрабатываем .. и .)
             resolved_path = target_path.resolve()
-            
-            # Проверяем существование директории
+
             if not resolved_path.exists():
                 return False, f"cd: {target_dir}: Директория не существует", 1
-            
+
             if not resolved_path.is_dir():
                 return False, f"cd: {target_dir}: Не является директорией", 1
-            
-            # Меняем текущую директорию
+
             self.current_directory = resolved_path
-            
+
             return True, f"Директория изменена на: {resolved_path}", 0
-            
+
         except Exception as e:
             return False, f"cd: ошибка: {e}", 1
-    
+
     def get_current_directory(self) -> Path:
-        """
-        Получение текущей рабочей директории
-        
+        """Получение текущей директории чата.
+
         Returns:
             Path: Текущая директория
         """
         return self.current_directory
-    
+
     @staticmethod
     def is_terminal_command(text: str) -> Tuple[bool, Optional[str]]:
-        """
-        Проверка является ли текст терминальной командой
-        
+        """Проверка, является ли сообщение терминальной командой (начинается с !).
+
         Args:
-            text: Текст для проверки
-            
+            text: Текст сообщения
+
         Returns:
-            Tuple[bool, Optional[str]]: (является командой, команда без префикса)
+            Tuple[bool, Optional[str]]: (является ли командой, команда без префикса !)
         """
         text = text.strip()
         if text.startswith('!'):
             return True, text[1:].strip()
         return False, None
-    
+
     @staticmethod
     def format_command_output(output: str, success: bool, return_code: int) -> str:
-        """
-        Форматирование вывода команды в Markdown
-        
+        """Форматирование вывода команды в Markdown.
+
         Args:
             output: Вывод команды
             success: Успешность выполнения
             return_code: Код возврата
-            
+
         Returns:
-            str: Отформатированный вывод в Markdown
+            str: Вывод в блоке кода и строка со статусом
         """
         status_text = "Выполнено" if success else f"Завершено с кодом {return_code}"
-        
+
         return (
             f"```\n{output}\n```\n"
             f"**{status_text}**"
         )
-    
+
     def is_file_command(self, command: str) -> bool:
-        """
-        Проверка является ли команда файловой
-        
+        """Проверка, работает ли команда с файлами.
+
         Args:
-            command: Команда для проверки
-            
+            command: Команда без префикса !
+
         Returns:
-            bool: True если команда работает с файловой системой
+            bool: True, если команда из списка FILE_COMMANDS
         """
         command_parts = command.split()
         if not command_parts:

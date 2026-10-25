@@ -61,5 +61,13 @@ target-version = "py313"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-# Базовый набор: синтаксические ошибки, неопределенные имена, неиспользуемые импорты
-select = ["E4", "E7", "E9", "F"]
+# Базовый набор: синтаксические ошибки, неопределенные имена, неиспользуемые импорты.
+# D - docstring по PEP 257 в формате Google
+select = ["E4", "E7", "E9", "F", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# В тестах docstring не обязательны: назначение теста видно из его имени
+"tests/**" = ["D"]

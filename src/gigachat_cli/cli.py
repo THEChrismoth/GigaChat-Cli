@@ -1,4 +1,4 @@
-"""Неинтерактивный режим: один запрос из командной строки без TUI"""
+"""Неинтерактивный режим: один запрос из командной строки без TUI."""
 
 import argparse
 import asyncio
@@ -22,7 +22,11 @@ EXIT_INTERRUPTED = 130
 
 
 def _package_version() -> str:
-    """Версия установленного пакета"""
+    """Получение версии установленного пакета.
+
+    Returns:
+        str: Версия или unknown, если пакет не установлен
+    """
     try:
         return version("gigachat-cli")
     except PackageNotFoundError:
@@ -30,7 +34,11 @@ def _package_version() -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Парсер аргументов командной строки"""
+    """Создание парсера аргументов командной строки.
+
+    Returns:
+        argparse.ArgumentParser: Парсер аргументов gigachat
+    """
     parser = argparse.ArgumentParser(
         prog="gigachat",
         description="GigaChat CLI. Без аргументов запускается интерактивный интерфейс.",
@@ -68,8 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def read_prompt(prompt: str, stdin: TextIO) -> str:
-    """
-    Сборка запроса из аргумента и stdin
+    """Сборка запроса из аргумента и stdin.
 
     Args:
         prompt: Запрос из аргумента -p (может быть пустым)
@@ -84,14 +91,18 @@ def read_prompt(prompt: str, stdin: TextIO) -> str:
 
 
 def _write_json(stream: TextIO, data: Dict[str, Any]) -> None:
-    """Вывод JSON-объекта одной строкой"""
+    """Вывод JSON-объекта одной строкой (формат JSON Lines).
+
+    Args:
+        stream: Поток вывода
+        data: Объект для вывода
+    """
     stream.write(json.dumps(data, ensure_ascii=False) + "\n")
     stream.flush()
 
 
 async def run_prompt(prompt: str, output_format: str, stdout: TextIO, stderr: TextIO) -> int:
-    """
-    Выполнение одного запроса с выводом в заданном формате
+    """Выполнение одного запроса с выводом в заданном формате.
 
     Args:
         prompt: Запрос пользователя
@@ -147,21 +158,27 @@ async def run_prompt(prompt: str, output_format: str, stdout: TextIO, stderr: Te
 
 
 def _use_utf8_output() -> None:
-    """Вывод в UTF-8 независимо от кодировки консоли (важно для Windows и перенаправления в файл)"""
+    """Переключение stdout и stderr на UTF-8.
+
+    Без этого на Windows при перенаправлении в файл или конвейер вывод идет
+    в кодировке системы, и символы вне нее (например, эмодзи) теряются.
+    """
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """
-    Точка входа неинтерактивного режима
+    """Точка входа неинтерактивного режима.
 
     Args:
         argv: Аргументы командной строки (по умолчанию sys.argv[1:])
 
     Returns:
-        int: Код возврата
+        int: Код возврата (EXIT_OK, EXIT_ERROR или EXIT_INTERRUPTED)
+
+    Raises:
+        SystemExit: Неверные аргументы или пустой запрос (код EXIT_USAGE), --help, --version
     """
     parser = build_parser()
     args = parser.parse_args(argv)

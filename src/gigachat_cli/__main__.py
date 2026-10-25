@@ -1,13 +1,20 @@
+"""Точка входа: команда gigachat и python -m gigachat_cli."""
+
 import sys
 from typing import List, Optional
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """
-    Основная функция запуска приложения GigaChat CLI
+    """Запуск GigaChat CLI.
 
     Без аргументов запускается интерактивный интерфейс (TUI),
-    с аргументами - неинтерактивный режим (gigachat -p "запрос")
+    с аргументами - неинтерактивный режим (gigachat -p "запрос").
+
+    Args:
+        argv: Аргументы командной строки (по умолчанию sys.argv[1:])
+
+    Returns:
+        int: Код возврата
     """
     argv = sys.argv[1:] if argv is None else argv
 
