@@ -2,11 +2,21 @@ from pathlib import Path
 import os
 from typing import List, Tuple
 
-from gigachat_cli.utils.command import FILE_COMMANDS
+from gigachat_cli.utils.command import (
+    FILE_COMMANDS,
+    POSIX_PARSING,
+    quote_command_argument,
+    split_command_arguments,
+)
 
 
-# Разделители пути: обратный слеш - только на Windows, в POSIX это допустимый символ имени файла
-PATH_SEPARATORS = ('/', '\\') if os.name == 'nt' else ('/',)
+def path_separators(posix: bool = POSIX_PARSING) -> Tuple[str, ...]:
+    """Разделители пути: обратный слеш - только на Windows, в POSIX это допустимый символ имени файла"""
+    return ('/',) if posix else ('/', '\\')
+
+
+# Разделители пути для текущей ОС
+PATH_SEPARATORS = path_separators()
 
 
 def split_path_argument(argument: str, separators: Tuple[str, ...] = PATH_SEPARATORS) -> Tuple[str, str]:
@@ -22,6 +32,31 @@ def split_path_argument(argument: str, separators: Tuple[str, ...] = PATH_SEPARA
     """
     separator_index = max(argument.rfind(separator) for separator in separators)
     return argument[:separator_index + 1], argument[separator_index + 1:]
+
+
+def complete_path_argument(text: str, name: str, posix: bool = POSIX_PARSING) -> str:
+    """
+    Подстановка выбранного имени файла в последний аргумент команды
+
+    Последний аргумент заменяется целиком: путь до имени сохраняется, а результат
+    экранируется (пробелы и спецсимволы) в стиле, которым пользователь начал аргумент.
+
+    Args:
+        text: Текст команды из поля ввода
+        name: Выбранное имя файла или директории
+        posix: Правила POSIX-shell или cmd.exe
+
+    Returns:
+        str: Новый текст команды
+    """
+    arguments = split_command_arguments(text, posix)
+    if len(arguments) < 2:
+        separator = '' if not text or text[-1].isspace() else ' '
+        return text + separator + quote_command_argument(name, posix=posix)
+
+    last = arguments[-1]
+    dir_part, _ = split_path_argument(last.value, path_separators(posix))
+    return text[:last.start] + quote_command_argument(dir_part + name, last.quote, posix)
 
 
 class FileUtils:
@@ -49,20 +84,17 @@ class FileUtils:
         """
         if not text.strip().startswith('!'):
             return False
-        
-        # Разбираем команду на части
-        parts = text.strip().split()
-        if len(parts) < 1:
-            return False
-        
-        command = parts[0][1:]  # Убираем префикс !
-        
+
+        # Разбираем команду на аргументы с учетом кавычек
+        arguments = split_command_arguments(text)
+        command = arguments[0].value[1:]  # Убираем префикс !
+
         # Проверяем, является ли команда файловой
         if command not in self.file_commands:
             return False
-        
-        # Показываем файлы если есть пробел после команды или есть аргументы
-        return len(parts) >= 2 or text.endswith(' ')
+
+        # Показываем файлы если после команды начат аргумент (в том числе пустой - после пробела)
+        return len(arguments) >= 2
     
     def get_files_for_completion(self, text: str) -> Tuple[List[str], str, str]:
         """
@@ -74,22 +106,15 @@ class FileUtils:
         Returns:
             Tuple[List[str], str, str]: (список файлов, полная команда, текущий путь)
         """
-        parts = text.strip().split()
-        if len(parts) < 1:
-            return [], text, ""
-
         current_dir = self.command_utils.get_current_directory()
 
-        # После пробела начинается новый аргумент, иначе дополняется последний
-        if text.endswith(' '):
-            last_part = ""
-        elif len(parts) >= 2:
-            last_part = parts[-1]
-        else:
+        # Дополняется последний аргумент (пустой, если строка заканчивается пробелом)
+        arguments = split_command_arguments(text)
+        if len(arguments) < 2:
             return [], text, str(current_dir)
 
-        # Разделение аргумента на директорию и шаблон имени (поддерживаются / и \)
-        dir_part, search_pattern = split_path_argument(last_part)
+        # Разделение аргумента (без кавычек и экранирования) на директорию и шаблон имени
+        dir_part, search_pattern = split_path_argument(arguments[-1].value)
 
         # Определение базового пути для поиска (абсолютный, ~ или относительный)
         dir_path = Path(os.path.expanduser(dir_part)) if dir_part else Path()

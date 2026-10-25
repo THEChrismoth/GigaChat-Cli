@@ -127,6 +127,82 @@ def test_completion_backslash_in_file_name_posix(file_utils, tree):
     assert complete(file_utils, "!cat odd\\n") == (["odd\\name.txt"], "!cat odd\\name.txt")
 
 
+@pytest.fixture
+def spaced_tree(tmp_path):
+    (tmp_path / "My Docs").mkdir()
+    (tmp_path / "My Docs" / "my notes.txt").write_text("notes", encoding="utf-8")
+    (tmp_path / "Music").mkdir()
+    return tmp_path
+
+
+@pytest.fixture
+def spaced_utils(spaced_tree):
+    commands = CommandUtils()
+    commands.current_directory = spaced_tree
+    return FileUtils(commands)
+
+
+def test_completion_lists_names_with_spaces(spaced_utils):
+    files, _ = complete(spaced_utils, "!ls M")
+    assert files == ["Music", "My Docs"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("!ls My\\ ", "!ls My\\ Docs", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
+        pytest.param("!ls 'My ", "!ls 'My Docs'", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
+        pytest.param('!dir "My ', '!dir "My Docs"', marks=windows_only),
+    ],
+)
+def test_completion_name_with_spaces(spaced_utils, text, expected):
+    # Пробел внутри кавычек или после \ - часть имени, а не начало нового аргумента
+    files, value = complete(spaced_utils, text)
+
+    assert files == ["My Docs"]
+    assert value == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("!cat My\\ Docs/my", "!cat My\\ Docs/my\\ notes.txt", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
+        pytest.param("!cat 'My Docs'/m", "!cat 'My Docs/my notes.txt'", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
+        pytest.param('!type "My Docs"\\m', '!type "My Docs\\my notes.txt"', marks=windows_only),
+        pytest.param('!type "My Docs/m', '!type "My Docs/my notes.txt"', marks=windows_only),
+    ],
+)
+def test_completion_inside_directory_with_spaces(spaced_utils, text, expected):
+    files, value = complete(spaced_utils, text)
+
+    assert files == ["my notes.txt"]
+    assert value == expected
+
+
+async def test_completed_path_with_spaces_is_executable(spaced_utils, spaced_tree):
+    # Подставленный путь с пробелами принимается командой без доработки вручную
+    from conftest import python_command
+
+    prefix = "!type " if os.name == "nt" else "!cat "
+    _, value = complete(spaced_utils, prefix + ("\"My Docs\"\\m" if os.name == "nt" else "My\\ Docs/m"))
+    argument = value[len(prefix):]
+
+    command = python_command("import sys; print(open(sys.argv[1]).read())") + " " + argument
+    success, output, _ = await spaced_utils.command_utils.execute_system_command(command)
+
+    assert success, output
+    assert output.strip() == "notes"
+
+
+async def test_cd_into_completed_directory_with_spaces(spaced_utils, spaced_tree):
+    _, value = complete(spaced_utils, "!cd My\\ D" if os.name != "nt" else '!cd "My D')
+
+    success, output, _ = await spaced_utils.command_utils.execute_system_command(value[1:])
+
+    assert success, output
+    assert spaced_utils.command_utils.get_current_directory() == (spaced_tree / "My Docs").resolve()
+
+
 def test_completion_absolute_path(file_utils, tree):
     files, value = complete(file_utils, f"!cat {tree / 'src'}/ma")
 

@@ -1,11 +1,116 @@
 import asyncio
 import shlex
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import List, Tuple, Optional
 
 
 IS_WINDOWS = os.name == 'nt'
+
+# Правила разбора командной строки: POSIX (shlex) или cmd.exe на Windows
+POSIX_PARSING = not IS_WINDOWS
+
+
+@dataclass
+class CommandArgument:
+    """Аргумент командной строки"""
+    start: int                    # Позиция начала аргумента в исходной строке
+    value: str                    # Значение без кавычек и экранирования
+    quote: Optional[str] = None   # Кавычка, которой открыт аргумент (если есть)
+
+
+def split_command_arguments(text: str, posix: bool = POSIX_PARSING) -> List[CommandArgument]:
+    """
+    Разбор командной строки на аргументы с учетом кавычек и экранирования
+
+    В отличие от shlex.split не завершается ошибкой на незакрытой кавычке или
+    завершающем обратном слеше: строка разбирается в процессе ввода.
+    Если строка заканчивается пробелом вне кавычек, добавляется пустой аргумент,
+    который пользователь начинает вводить.
+
+    Args:
+        text: Командная строка
+        posix: Правила POSIX-shell (кавычки ' и ", экранирование \\)
+            или cmd.exe (только кавычки ", обратный слеш - обычный символ)
+
+    Returns:
+        List[CommandArgument]: Аргументы в порядке следования
+    """
+    arguments: List[CommandArgument] = []
+    current: Optional[CommandArgument] = None
+    quote: Optional[str] = None
+    quote_chars = ('"', "'") if posix else ('"',)
+    index = 0
+
+    while index < len(text):
+        char = text[index]
+
+        if quote is None and char.isspace():
+            current = None
+            index += 1
+            continue
+
+        if current is None:
+            current = CommandArgument(start=index, value="", quote=char if char in quote_chars else None)
+            arguments.append(current)
+
+        if quote is None:
+            if char in quote_chars:
+                quote = char
+            elif posix and char == '\\':
+                # Экранированный символ добавляется как есть
+                index += 1
+                if index < len(text):
+                    current.value += text[index]
+            else:
+                current.value += char
+        elif char == quote:
+            quote = None
+        elif posix and quote == '"' and char == '\\' and text[index + 1:index + 2] in ('\\', '"', '$', '`'):
+            index += 1
+            current.value += text[index]
+        else:
+            current.value += char
+        index += 1
+
+    # Строка закончилась пробелом вне кавычек - начат новый аргумент
+    if arguments and current is None:
+        arguments.append(CommandArgument(start=len(text), value=""))
+
+    return arguments
+
+
+# Символы, требующие экранирования в POSIX-shell
+_POSIX_SPECIAL_CHARS = set(' \t\n\'"\\$`&|;<>()*?[]{}#!')
+
+# Символы, требующие кавычек в cmd.exe
+_CMD_SPECIAL_CHARS = set(' \t&()[]{}^=;!\'+,`')
+
+
+def quote_command_argument(value: str, quote: Optional[str] = None, posix: bool = POSIX_PARSING) -> str:
+    """
+    Экранирование аргумента для командной строки
+
+    Args:
+        value: Значение аргумента
+        quote: Предпочитаемая кавычка (та, которой пользователь начал аргумент)
+        posix: Правила POSIX-shell или cmd.exe
+
+    Returns:
+        str: Аргумент, который split_command_arguments разберет обратно в value
+    """
+    if not posix:
+        if quote == '"' or any(char in _CMD_SPECIAL_CHARS for char in value):
+            return f'"{value}"'
+        return value
+
+    if quote == "'":
+        return "'" + value.replace("'", "'\\''") + "'"
+    if quote == '"':
+        escaped = ''.join('\\' + char if char in '\\"$`' else char for char in value)
+        return f'"{escaped}"'
+    return ''.join('\\' + char if char in _POSIX_SPECIAL_CHARS else char for char in value)
 
 # Список команд, работающих с файловой системой
 FILE_COMMANDS = ['cd', 'ls', 'cp', 'mv', 'rm', 'mkdir', 'cat', 'touch', 'find', 'grep']
@@ -142,11 +247,8 @@ class CommandUtils:
             Tuple[bool, str, int]: (успех, сообщение, код возврата)
         """
         try:
-            if IS_WINDOWS:
-                # В POSIX-режиме shlex съедает обратные слеши в путях Windows
-                args = [arg.strip('"') for arg in shlex.split(command, posix=False)]
-            else:
-                args = shlex.split(command)
+            # Те же правила разбора, что и при автодополнении: "My Docs", My\ Docs, "My Docs"/sub
+            args = [argument.value for argument in split_command_arguments(command)]
 
             # cd без аргументов - переход в домашнюю директорию
             target_dir = args[1] if len(args) > 1 else "~"

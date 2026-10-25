@@ -2,7 +2,7 @@ from textual.widgets import Static
 from textual.reactive import reactive
 from pathlib import Path
 
-from gigachat_cli.utils.file import split_path_argument
+from gigachat_cli.utils.file import complete_path_argument
 
 
 class FileList(Static):
@@ -113,16 +113,9 @@ class FileList(Static):
         """
         selected_file = self.get_selected_file()
         if selected_file and self.current_command:
-            command = self.current_command
+            # Замена последнего аргумента с экранированием пробелов и спецсимволов
+            new_text = complete_path_argument(self.current_command, selected_file)
 
-            if command.endswith(' '):
-                # Начат новый аргумент - просто добавляем файл
-                new_text = command + selected_file
-            else:
-                # Замена введенного начала имени в последнем аргументе (путь до него сохраняется)
-                _, typed_name = split_path_argument(command.split()[-1])
-                new_text = command[:len(command) - len(typed_name)] + selected_file
-            
             input_field.value = new_text
             input_field.cursor_position = len(new_text)
             self.add_class("hidden")
