@@ -1,6 +1,8 @@
 """Строка состояния с текущей директорией."""
 
 import os
+from pathlib import Path
+
 from textual.widgets import Static
 
 
@@ -21,6 +23,23 @@ class Dir(Static):
         """Отрисовка текущей директории.
 
         Returns:
-            str: Строка с иконкой и путем директории
+            str: Строка с иконкой и путем директории (домашняя директория сокращается до ~)
         """
-        return f"📁 Директория: {self.current_dir}"
+        return f"📁 Директория: {shorten_home(self.current_dir)}"
+
+
+def shorten_home(path: str) -> str:
+    """Замена домашней директории в начале пути на ~.
+
+    Args:
+        path: Путь к директории
+
+    Returns:
+        str: Путь вида ~/projects/app или исходный путь, если он вне домашней директории
+    """
+    home = str(Path.home())
+    if path == home:
+        return "~"
+    if path.startswith(home.rstrip("/\\") + os.sep):
+        return "~" + path[len(home.rstrip("/\\")):]
+    return path

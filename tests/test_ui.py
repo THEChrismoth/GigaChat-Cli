@@ -198,6 +198,45 @@ async def test_model_selection_cancel(answers):
         assert "Выбор отменен" in chat_text(pilot.app.screen)
 
 
+async def test_status_bar_shows_directory_on_narrow_screen(answers, tmp_path):
+    # Регрессия: длинный путь переносился на вторую строку, и строка состояния (высота 1)
+    # показывала только "Директория:" без пути
+    long_dir = tmp_path / "project_directory"
+    long_dir.mkdir()
+
+    async with ChatApp().run_test(size=(60, 40)) as pilot:
+        screen = pilot.app.screen
+        screen.command_utils.current_directory = long_dir
+        screen._update_directory_display()
+        await pilot.pause()
+
+        # Видимое содержимое экрана: начало пути должно попасть в строку состояния
+        screenshot = pilot.app.export_screenshot()
+
+        assert "Директория:" in screenshot.replace("&#160;", " ")
+        assert tmp_path.parts[1][:3] in screenshot or "~" in screenshot
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("{home}", "~"),
+        ("{home}{sep}projects{sep}app", "~{sep}projects{sep}app"),
+        ("{other}", "{other}"),
+    ],
+)
+def test_shorten_home(monkeypatch, tmp_path, path, expected):
+    import os
+    from gigachat_cli.widgets.dir import shorten_home
+
+    home = tmp_path / "home"
+    other = str(tmp_path / "elsewhere")
+    monkeypatch.setattr("gigachat_cli.widgets.dir.Path.home", lambda: home)
+    values = {"home": str(home), "sep": os.sep, "other": other}
+
+    assert shorten_home(path.format(**values)) == expected.format(**values)
+
+
 async def test_main_app_starts_with_menu():
     async with Main().run_test() as pilot:
         assert isinstance(pilot.app.screen, MenuApp)

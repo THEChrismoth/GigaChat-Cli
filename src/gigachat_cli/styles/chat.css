@@ -14,12 +14,15 @@
   color: yellow;
   width: 1fr;
   text-align: left;
+  text-wrap: nowrap;
+  text-overflow: ellipsis;
 }
 
 .model{
   color: blue;
-  width: 1fr;
+  width: auto;
   text-align: right;
+  text-wrap: nowrap;
 }
 
 .typing {
