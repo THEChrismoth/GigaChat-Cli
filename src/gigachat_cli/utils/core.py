@@ -91,6 +91,8 @@ class GigaChatManager:
             self._last_files_context = []
             self._giga: Optional[GigaChat] = None
             self._giga_key: Optional[Tuple] = None
+            # Модель на время запуска (--model), без сохранения в конфигурацию
+            self.model_override: Optional[str] = None
             self._initialized = True
 
     def _get_api_key(self) -> str:
@@ -129,7 +131,7 @@ class GigaChatManager:
 
     def _get_giga_chat_instance(self) -> GigaChat:
         """Получение экземпляра GigaChat с текущей моделью из конфига (с кешированием)"""
-        current_model = self.config.get_model()
+        current_model = self.get_current_model()
         api_key = self._get_api_key()
         ssl_settings = self._get_ssl_settings()
 
@@ -536,7 +538,7 @@ class GigaChatManager:
 
     def get_current_model(self) -> str:
         """Получение текущей модели"""
-        return self.config.get_model()
+        return self.model_override or self.config.get_model()
 
     def get_conversation_stats(self) -> Dict:
         """Получение статистики текущей сессии"""

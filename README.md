@@ -86,6 +86,24 @@ gigachat
 
 ![GigaChat CLI Screenshot](https://github.com/THEChrismoth/GigaChat-Cli/blob/asset/gigachat_work.jpg)
 
+### Неинтерактивный режим
+
+Для скриптов, конвейеров и CI: один запрос, ответ в stdout, без интерактивного интерфейса.
+```
+gigachat -p "Объясни что делает main.py"
+git diff | gigachat -p "Напиши commit message"
+gigachat -p "Покажи структуру проекта" --output-format json
+```
+
+- `-p`, `--print [PROMPT]` - запрос. Данные из stdin добавляются к нему; без `PROMPT` запросом считается stdin
+- `--output-format` - формат вывода:
+  - `text` (по умолчанию) - только ответ, по мере генерации; ошибки - в stderr
+  - `json` - один JSON-объект: `type`, `is_error`, `result`, `error`, `model`, `files`, `duration_ms`
+  - `stream-json` - события JSON Lines по мере генерации: `start`, `chunk` (`content`), в конце `result`
+- `--model` - модель на этот запуск без сохранения в настройках (например, `GigaChat-2-Pro`)
+- Коды возврата: `0` - успех, `1` - ошибка API, `2` - неверные аргументы, `130` - прервано
+- Вывод всегда в UTF-8
+
 ## Доступные команды
 
 - **/model** - выбор модели GigaChat (Lite/Pro/Max)
