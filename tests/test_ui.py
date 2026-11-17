@@ -11,6 +11,8 @@ from gigachat_cli.screens.chat import ChatScreen
 from gigachat_cli.screens.start import MenuApp
 from gigachat_cli.utils.config import DEFAULT_MODEL, Config
 from gigachat_cli.utils.core import StreamChunk
+from gigachat_cli.utils.command import split_command_arguments
+from gigachat_cli.widgets.file_list import FileList
 
 
 class ChatApp(App):
@@ -289,10 +291,73 @@ async def test_terminal_cd_updates_project_path(answers, tmp_path):
         screen = pilot.app.screen
         screen.command_utils.current_directory = tmp_path
 
-        await send(pilot, "!cd sub")
+        await send(pilot, "!cd sub/")
         await send(pilot, "вопрос")
 
         assert fake.calls == [("вопрос", str((tmp_path / "sub").resolve()))]
+
+
+@pytest.mark.parametrize("command", ["!cat ", "!cd "])
+async def test_directory_selection_opens_children_until_file(answers, tmp_path, command):
+    fake = answers([])
+    nested = tmp_path / "My Docs" / "Вложенная папка"
+    nested.mkdir(parents=True)
+    (nested / "notes.txt").write_text("notes", encoding="utf-8")
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.command_utils.current_directory = tmp_path
+        field = screen.query_one(Input)
+        files = screen.query_one(FileList)
+        field.value = command
+        await pilot.pause()
+        for expected in ["My Docs", "Вложенная папка", "notes.txt"]:
+            assert not files.has_class("hidden")
+            assert files.files == [expected]
+            await pilot.press("enter")
+            await pilot.pause()
+            assert not screen.is_processing_stream
+        assert files.has_class("hidden")
+        assert split_command_arguments(field.value)[-1].value == "My Docs/Вложенная папка/notes.txt"
+        assert fake.calls == []
+
+
+async def test_cd_selected_directory_can_be_executed_with_escape(answers, tmp_path):
+    (tmp_path / "folder").mkdir()
+    (tmp_path / "folder" / "child").mkdir()
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.command_utils.current_directory = tmp_path
+        screen.query_one(Input).value = "!cd "
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not screen.query_one(FileList).has_class("hidden")
+        await pilot.press("escape")
+        await pilot.press("enter")
+        task = screen.current_stream_task
+        if task:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert screen.command_utils.get_current_directory() == (tmp_path / "folder").resolve()
+
+
+async def test_empty_directory_selection_closes_completion(answers, tmp_path):
+    (tmp_path / "empty").mkdir()
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.command_utils.current_directory = tmp_path
+        field = screen.query_one(Input)
+        field.value = "!cd "
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert field.value == "!cd empty/"
+        assert screen.query_one(FileList).has_class("hidden")
+        assert screen.command_utils.get_current_directory() == tmp_path
+        await pilot.press("enter")
+        task = screen.current_stream_task
+        if task:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert screen.command_utils.get_current_directory() == (tmp_path / "empty").resolve()
 
 
 async def test_help_command(answers):

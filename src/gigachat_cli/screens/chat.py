@@ -240,10 +240,6 @@ class ChatScreen(Screen):
                 file_list.select_previous()
                 event.prevent_default()
                 event.stop()
-            elif event.key == "enter":
-                file_list.apply_selection(self.query_one("#message_input"))
-                event.prevent_default()
-                self.query_one("#message_input").focus()
             elif event.key == "escape":
                 file_list.add_class("hidden")
                 event.prevent_default()

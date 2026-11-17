@@ -108,12 +108,12 @@ def test_directories_listed_first(file_utils):
 @pytest.mark.parametrize(
     ("text", "files", "result"),
     [
-        ("!ls ", ["Scripts", "src", "setup.py"], "!ls Scripts"),
+        ("!ls ", ["Scripts", "src", "setup.py"], "!ls Scripts/"),
         ("!ls se", ["setup.py"], "!ls setup.py"),
         ("!cat src/m", ["main.py", "module.py"], "!cat src/main.py"),
         pytest.param("!cat src\\mo", ["module.py"], "!cat src\\module.py", marks=windows_only),
-        ("!cp setup.py ", ["Scripts", "src", "setup.py"], "!cp setup.py Scripts"),
-        ("!cp  setup.py  sr", ["src"], "!cp  setup.py  src"),
+        ("!cp setup.py ", ["Scripts", "src", "setup.py"], "!cp setup.py Scripts/"),
+        ("!cp  setup.py  sr", ["src"], "!cp  setup.py  src/"),
     ],
 )
 def test_completion(file_utils, text, files, result):
@@ -151,9 +151,9 @@ def test_completion_lists_names_with_spaces(spaced_utils):
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        pytest.param("!ls My\\ ", "!ls My\\ Docs", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
-        pytest.param("!ls 'My ", "!ls 'My Docs'", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
-        pytest.param('!dir "My ', '!dir "My Docs"', marks=windows_only),
+        pytest.param("!ls My\\ ", "!ls My\\ Docs/", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
+        pytest.param("!ls 'My ", "!ls 'My Docs/'", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
+        pytest.param('!dir "My ', '!dir "My Docs/"', marks=windows_only),
     ],
 )
 def test_completion_name_with_spaces(spaced_utils, text, expected):
@@ -218,7 +218,7 @@ def test_completion_home_path(file_utils, tree, monkeypatch):
     files, value = complete(file_utils, "!ls ~/sr")
 
     assert files == ["src"]
-    assert value == "!ls ~/src"
+    assert value == "!ls ~/src/"
 
 
 def test_completion_missing_directory(file_utils):
