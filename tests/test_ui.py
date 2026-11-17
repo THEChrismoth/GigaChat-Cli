@@ -91,6 +91,33 @@ async def test_api_error_is_displayed(answers):
         assert "**Ошибка:** GIGACHAT_API_KEY не установен" in chat_text(pilot.app.screen)
 
 
+@pytest.mark.parametrize("size", [(80, 24), (120, 40), (60, 24)])
+async def test_stream_respects_scroll_position_and_focus(answers, size):
+    answers([
+        StreamChunk("\n\n".join(f"Строка {i}" for i in range(start, start + 10)) + "\n\n")
+        for start in range(0, 80, 10)
+    ] + [StreamChunk("", is_final=True)])
+    async with ChatApp().run_test(size=size) as pilot:
+        await send(pilot, "Длинный ответ")
+        screen = pilot.app.screen
+        container = screen.query_one("#chat_container")
+        assert screen.query_one(".banner").has_class("hidden")
+        assert container.size.height >= 15
+        assert container.is_vertical_scroll_end
+        container.scroll_home(animate=False)
+        container.focus()
+        await pilot.pause()
+        assert pilot.app.focused is container
+        screen.update_chat_display(screen.current_exchange + "\n\nПродолжение")
+        await pilot.pause()
+        assert container.scroll_y == 0
+        container.scroll_end(animate=False)
+        await pilot.pause()
+        screen.update_chat_display(screen.current_exchange + "\n\nЕщё продолжение")
+        await pilot.pause()
+        assert container.is_vertical_scroll_end
+
+
 async def test_history_survives_messages_help_and_model_selection(answers):
     answers([StreamChunk("Ответ", is_final=True)])
     async with ChatApp().run_test() as pilot:

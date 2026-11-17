@@ -65,6 +65,8 @@ class ChatScreen(Screen):
         self.last_user_message: str = ""
         self.completed_exchanges: list[str] = []
         self.current_exchange: str = ""
+        self._display_revision = 0
+        self._follow_scroll_y: float | None = None
 
     def compose(self) -> ComposeResult:
         """Создание виджетов экрана.
@@ -113,27 +115,6 @@ class ChatScreen(Screen):
             self.current_typing_indicator.stop_animation()
             self.current_typing_indicator.remove()
             self.current_typing_indicator = None
-
-    def on_click(self, event: events.Click) -> None:
-        """Возврат фокуса в поле ввода при клике по экрану.
-
-        Args:
-            event: Событие клика
-        """
-        if not self.selector_manager.selector_active:
-            input_field = self.query_one("#message_input")
-            if hasattr(event.widget, 'id') and event.widget.id != "message_input":
-                input_field.focus()
-
-    def on_focus(self, event: events.Focus) -> None:
-        """Возврат фокуса в поле ввода, если его получил другой виджет.
-
-        Args:
-            event: Событие получения фокуса
-        """
-        if not self.selector_manager.selector_active:
-            if event.widget.id != "message_input":
-                self.query_one("#message_input").focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Показ автодополнения команд (/...) или файлов (!команда ...).
@@ -268,11 +249,6 @@ class ChatScreen(Screen):
                 event.prevent_default()
                 self.query_one("#message_input").focus()
 
-        # Без открытых списков Tab не переключает фокус с поля ввода
-        elif event.key == "tab" and command_list.has_class("hidden") and file_list.has_class("hidden"):
-            event.prevent_default()
-            event.stop()
-
         # Отмена запроса к GigaChat или терминальной команды
         elif event.key in ("escape", "ctrl+c") and self.is_processing_stream:
             if self.current_stream_task and not self.current_stream_task.cancelling():
@@ -319,6 +295,8 @@ class ChatScreen(Screen):
         if self.current_exchange:
             self.completed_exchanges.append(self.current_exchange)
         self.current_exchange = ""
+        self.query_one(Banner).add_class("hidden")
+        self.query_one(Recommend).add_class("hidden")
         self.clear_chat_display()
 
         for handler in self.handlers:
@@ -360,7 +338,7 @@ class ChatScreen(Screen):
         dir_widget.refresh()
 
     def clear_chat_display(self) -> None:
-        """Очистка области чата, в том числе временных виджетов (индикатора, списка выбора)."""
+        """Очистить текущий обмен и временные виджеты, сохранив завершённые обмены."""
         chat_display = self.query_one("#chat_display", Markdown)
         self.current_exchange = ""
         chat_display.update("\n\n---\n\n".join(self.completed_exchanges))
@@ -371,15 +349,38 @@ class ChatScreen(Screen):
                 child.remove()
 
     def update_chat_display(self, content: str = "") -> None:
-        """Замена содержимого чата и прокрутка в конец.
+        """Обновить текущий обмен, следуя за ответом только при чтении конца чата.
 
         Args:
             content: Текст в формате Markdown
         """
+        chat_container = self.query_one("#chat_container", VerticalScroll)
+        follow_response = (
+            chat_container.is_vertical_scroll_end
+            or chat_container.scroll_y == self._follow_scroll_y
+        )
+        self._follow_scroll_y = chat_container.scroll_y if follow_response else None
         chat_display = self.query_one("#chat_display", Markdown)
         self.current_exchange = content
-        chat_display.update("\n\n---\n\n".join([*self.completed_exchanges, content]))
-        self.query_one("#chat_container").scroll_end()
+        self._display_revision += 1
+        update = chat_display.update("\n\n---\n\n".join([*self.completed_exchanges, content]))
+        if follow_response:
+            self.call_later(
+                self._scroll_after_update, update, self._display_revision, chat_container.scroll_y
+            )
+
+    async def _scroll_after_update(self, update, revision: int, scroll_y: float) -> None:
+        """Дождаться Markdown и не сбрасывать прокрутку, изменённую во время рендера."""
+        await update
+        chat_container = self.query_one("#chat_container", VerticalScroll)
+        if revision == self._display_revision and chat_container.scroll_y == scroll_y:
+            chat_container.scroll_end(animate=False)
+        self.call_after_refresh(self._finish_follow_scroll, revision)
+
+    def _finish_follow_scroll(self, revision: int) -> None:
+        """Сбросить временную позицию после завершения последнего обновления."""
+        if revision == self._display_revision:
+            self._follow_scroll_y = None
 
     def update_chat_display_stream(self, user_text: str, response_content: str) -> None:
         """Вывод сообщения пользователя и полученной части ответа.
