@@ -208,6 +208,13 @@ class ChatScreen(Screen):
         command_list = self.query_one("#command_list", CommandList)
         file_list = self.query_one("#file_list", FileList)
 
+        if event.key == "ctrl+c" and self.is_processing_stream:
+            if self.current_stream_task and not self.current_stream_task.cancelling():
+                self.current_stream_task.cancel()
+            event.prevent_default()
+            event.stop()
+            return
+
         # Список выбора (например, модели)
         if self.selector_manager.selector_active:
             if event.key == "down":
@@ -268,9 +275,8 @@ class ChatScreen(Screen):
 
         # Отмена запроса к GigaChat или терминальной команды
         elif event.key in ("escape", "ctrl+c") and self.is_processing_stream:
-            self._cleanup_stream_processing()
-            self.query_one("#message_input", Input).value = ""
-            self.update_chat_display(f"**Вы:** {self.last_user_message}\n\n*Запрос отменен пользователем*")
+            if self.current_stream_task and not self.current_stream_task.cancelling():
+                self.current_stream_task.cancel()
             event.prevent_default()
             event.stop()
 
@@ -279,7 +285,13 @@ class ChatScreen(Screen):
         try:
             await self.process_message()
         except asyncio.CancelledError:
-            pass
+            if self.is_mounted:
+                self.update_chat_display(
+                    f"{self.current_exchange}\n\n*Запрос отменен пользователем*"
+                )
+        except Exception as error:
+            if self.is_mounted:
+                self.update_chat_display(f"{self.current_exchange}\n\n**Ошибка:** {error}")
         finally:
             self._hide_typing_indicator()
             self.is_processing_stream = False

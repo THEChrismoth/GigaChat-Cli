@@ -136,6 +136,92 @@ async def test_escape_cancels_request(answers):
         assert task.done()
         assert not screen.is_processing_stream
         assert "Запрос отменен пользователем" in chat_text(screen)
+        assert "думаю..." in chat_text(screen)
+
+
+async def test_cancellation_keeps_draft_and_allows_next_request(answers):
+    answers([StreamChunk("Частичный ответ")], hang=True)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        input_field = screen.query_one("#message_input", Input)
+        input_field.value = "Первый запрос"
+        await pilot.press("enter")
+        await pilot.pause()
+        input_field.value = "/he"
+        await pilot.pause()
+        task = screen.current_stream_task
+        await pilot.press("ctrl+c")
+        await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert input_field.value == "/he"
+        assert "Частичный ответ" in chat_text(screen)
+        assert not screen.is_processing_stream
+        answers([StreamChunk("Следующий ответ", is_final=True)])
+        await send(pilot, "Следующий запрос")
+        assert "Частичный ответ" in chat_text(screen)
+        assert "Следующий ответ" in chat_text(screen)
+
+
+async def test_terminal_command_keeps_draft(answers, monkeypatch):
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def execute(command):
+        started.set()
+        await finish.wait()
+        return True, "готово", 0
+
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        monkeypatch.setattr(screen.command_utils, "execute_system_command", execute)
+        input_field = screen.query_one("#message_input", Input)
+        input_field.value = "!test"
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert input_field.value == ""
+        input_field.value = "Черновик"
+        task = screen.current_stream_task
+        finish.set()
+        await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert input_field.value == "Черновик"
+
+
+async def test_cancel_waits_for_cleanup_before_next_request(answers):
+    cancelling = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def stream(prompt, **kwargs):
+        calls.append(prompt)
+        yield StreamChunk("Начало")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        original = chat.get_answer_stream
+        chat.get_answer_stream = stream
+        try:
+            screen.query_one(Input).value = "Первый"
+            await pilot.press("enter")
+            await pilot.pause()
+            task = screen.current_stream_task
+            await pilot.press("escape")
+            await asyncio.wait_for(cancelling.wait(), timeout=5)
+            await pilot.press("escape")
+            assert not task.done()
+            screen.query_one(Input).value = "Второй"
+            await pilot.press("enter")
+            assert calls == ["Первый"]
+            assert screen.is_processing_stream
+            release.set()
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            assert not screen.is_processing_stream
+        finally:
+            release.set()
+            chat.get_answer_stream = original
 
 
 async def test_second_enter_ignored_while_processing(answers):

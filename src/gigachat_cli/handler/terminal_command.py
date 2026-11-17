@@ -31,6 +31,7 @@ class TerminalHandler:
         """
         is_terminal, command = CommandUtils.is_terminal_command(user_text)
         if is_terminal:
+            input_field.value = ""
             screen.update_chat_display(f"**Вы:** `!{command}`")
 
             screen.current_typing_indicator = TypingIndicator()
@@ -50,7 +51,6 @@ class TerminalHandler:
             # Команда могла сменить директорию (cd)
             screen._update_directory_display()
 
-            input_field.value = ""
             input_field.focus()
             return True
 
