@@ -63,6 +63,8 @@ class ChatScreen(Screen):
         self.current_response_content: str = ""
         self.is_processing_stream: bool = False
         self.last_user_message: str = ""
+        self.completed_exchanges: list[str] = []
+        self.current_exchange: str = ""
 
     def compose(self) -> ComposeResult:
         """Создание виджетов экрана.
@@ -302,7 +304,9 @@ class ChatScreen(Screen):
             self.app.pop_screen()
             return
 
-        # В чате показывается только последний обмен сообщениями
+        if self.current_exchange:
+            self.completed_exchanges.append(self.current_exchange)
+        self.current_exchange = ""
         self.clear_chat_display()
 
         for handler in self.handlers:
@@ -346,7 +350,8 @@ class ChatScreen(Screen):
     def clear_chat_display(self) -> None:
         """Очистка области чата, в том числе временных виджетов (индикатора, списка выбора)."""
         chat_display = self.query_one("#chat_display", Markdown)
-        chat_display.update("")
+        self.current_exchange = ""
+        chat_display.update("\n\n---\n\n".join(self.completed_exchanges))
 
         chat_container = self.query_one("#chat_container")
         for child in chat_container.children:
@@ -360,7 +365,8 @@ class ChatScreen(Screen):
             content: Текст в формате Markdown
         """
         chat_display = self.query_one("#chat_display", Markdown)
-        chat_display.update(content)
+        self.current_exchange = content
+        chat_display.update("\n\n---\n\n".join([*self.completed_exchanges, content]))
         self.query_one("#chat_container").scroll_end()
 
     def update_chat_display_stream(self, user_text: str, response_content: str) -> None:

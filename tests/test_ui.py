@@ -91,6 +91,23 @@ async def test_api_error_is_displayed(answers):
         assert "**Ошибка:** GIGACHAT_API_KEY не установен" in chat_text(pilot.app.screen)
 
 
+async def test_history_survives_messages_help_and_model_selection(answers):
+    answers([StreamChunk("Ответ", is_final=True)])
+    async with ChatApp().run_test() as pilot:
+        for index in range(10):
+            await send(pilot, f"Вопрос номер {index}")
+        await send(pilot, "/help")
+        await send(pilot, "/model")
+        await pilot.press("escape")
+        await pilot.pause()
+        text = chat_text(pilot.app.screen)
+        for index in range(10):
+            assert text.count(f"**Вы:** Вопрос номер {index}") == 1
+        assert text.count("**GigaChat:**") == 10
+        assert "Доступные команды" in text
+        assert "Выбор отменен" in text
+
+
 async def test_partial_answer_kept_on_error(answers):
     answers([StreamChunk("Начало ответа"), StreamChunk("", is_final=True, error="обрыв")])
 
