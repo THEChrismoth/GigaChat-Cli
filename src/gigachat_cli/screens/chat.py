@@ -18,6 +18,7 @@ from gigachat_cli.utils.selector import SelectorManager
 from gigachat_cli.utils.file import FileUtils
 
 from gigachat_cli.handler.help import HelpHandler
+from gigachat_cli.handler.file_edit import FileEditHandler
 from gigachat_cli.handler.model import ModelHandler
 from gigachat_cli.handler.terminal_command import TerminalHandler
 
@@ -53,6 +54,7 @@ class ChatScreen(Screen):
         # Обработчики проверяются по порядку, первый подходящий обрабатывает сообщение
         self.handlers =[
             HelpHandler(),
+            FileEditHandler(),
             ModelHandler(self.cfg, self),
             TerminalHandler(self.command_utils)
         ]

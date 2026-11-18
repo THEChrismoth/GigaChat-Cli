@@ -8,11 +8,13 @@ from conftest import python_command
 from gigachat_cli.main import Main
 from gigachat_cli.screens import chat
 from gigachat_cli.screens.chat import ChatScreen
+from gigachat_cli.screens.file_review import FileReviewScreen
 from gigachat_cli.screens.start import MenuApp
 from gigachat_cli.utils.config import DEFAULT_MODEL, Config
 from gigachat_cli.utils.core import StreamChunk
 from gigachat_cli.utils.command import split_command_arguments
 from gigachat_cli.widgets.file_list import FileList
+from gigachat_cli.handler.file_edit import chat_manager
 
 
 class ChatApp(App):
@@ -358,6 +360,98 @@ async def test_empty_directory_selection_closes_completion(answers, tmp_path):
         if task:
             await asyncio.wait_for(asyncio.shield(task), timeout=5)
         assert screen.command_utils.get_current_directory() == (tmp_path / "empty").resolve()
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40), (60, 24)])
+async def test_file_edit_review_confirm_and_undo(tmp_path, monkeypatch, size):
+    target = tmp_path / "Мои заметки [demo].txt"
+    target.write_bytes(b"original\n")
+
+    async def propose(snapshot, instruction):
+        assert snapshot.relative_path.name == target.name
+        assert instruction == "Обнови текст"
+        return snapshot.propose("[bold] replacement\n")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test(size=size) as pilot:
+        screen = pilot.app.screen
+        screen.command_utils.current_directory = tmp_path
+        command = f'/edit "{target.name}" Обнови текст'
+        await send(pilot, command)
+        review = pilot.app.screen
+        assert isinstance(review, FileReviewScreen)
+        assert review.path == target
+        assert "+[bold] replacement" in review.diff
+        assert pilot.app.focused.id == "reject_change"
+        assert target.read_bytes() == b"original\n"
+        assert "replacement" in pilot.app.export_screenshot()
+        await pilot.press("enter")
+        assert pilot.app.screen is screen
+        assert target.read_bytes() == b"original\n"
+
+        await send(pilot, command)
+        await pilot.press("tab", "enter")
+        assert pilot.app.screen is screen
+        assert target.read_bytes() == b"[bold] replacement\n"
+        assert "применено" in chat_text(screen)
+
+        await send(pilot, "/undo")
+        assert isinstance(pilot.app.screen, FileReviewScreen)
+        await pilot.press("escape")
+        assert pilot.app.screen is screen
+        assert target.read_bytes() == b"[bold] replacement\n"
+        await send(pilot, "/undo")
+        await pilot.press("tab", "enter")
+        assert target.read_bytes() == b"original\n"
+        assert "отменено" in chat_text(screen)
+
+
+async def test_file_creation_is_rechecked_at_confirmation(tmp_path, monkeypatch):
+    target = tmp_path / "new.txt"
+
+    async def propose(snapshot, instruction):
+        assert snapshot.data is None
+        return snapshot.propose("proposal\n")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.command_utils.current_directory = tmp_path
+        await send(pilot, "/edit new.txt Добавь текст")
+        assert isinstance(pilot.app.screen, FileReviewScreen)
+        assert not target.exists()
+        target.write_bytes(b"external")
+        await pilot.click("#apply_change")
+        assert pilot.app.screen is screen
+        assert target.read_bytes() == b"external"
+        assert "Файл изменился" in chat_text(screen)
+
+
+async def test_file_edit_can_be_cancelled_while_waiting(tmp_path, monkeypatch):
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def propose(snapshot, instruction):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.command_utils.current_directory = tmp_path
+        screen.query_one(Input).value = "/edit new.txt Добавь текст"
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=5)
+        await pilot.press("escape")
+        await asyncio.wait_for(stopped.wait(), timeout=5)
+        await pilot.pause()
+        assert pilot.app.screen is screen
+        assert not screen.is_processing_stream
+        assert "Запрос отменен" in chat_text(screen)
+        assert not (tmp_path / "new.txt").exists()
 
 
 async def test_help_command(answers):

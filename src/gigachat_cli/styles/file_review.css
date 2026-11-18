@@ -1,0 +1,36 @@
+FileReviewScreen {
+    align: center middle;
+    background: $background 65%;
+}
+
+#file_review {
+    width: 94%;
+    height: 90%;
+    padding: 0 1;
+    border: round $primary;
+    background: $surface;
+}
+
+#review_path {
+    max-height: 3;
+    text-overflow: ellipsis;
+    text-style: bold;
+}
+
+#diff_scroll {
+    height: 1fr;
+    border: solid $panel;
+}
+
+#diff_scroll:focus {
+    border: solid $primary;
+}
+
+#review_actions {
+    height: auto;
+    align-horizontal: right;
+}
+
+#review_actions Button {
+    margin-left: 1;
+}
