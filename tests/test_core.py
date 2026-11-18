@@ -5,6 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from gigachat_cli.utils import core
+from gigachat_cli.utils.file_edit import FileEditError, read_snapshot
 
 
 class FakeGiga:
@@ -200,6 +201,39 @@ def test_giga_client_is_cached(manager, monkeypatch):
 
 
 # --- Отправка сообщений ---
+
+@pytest.mark.parametrize(
+    ("content", "finish_reason", "valid"),
+    [
+        ('{"content":"new text\n"}'.replace("\n", "\\n"), "stop", True),
+        ('{"content":"shortened"}', "length", False),
+        ('{"path":"other.txt","content":"changed"}', "stop", False),
+        ("Обычный ответ вместо предложения", "stop", False),
+    ],
+)
+async def test_propose_file_edit_is_isolated(manager, monkeypatch, tmp_path, content, finish_reason, valid):
+    target = tmp_path / "notes.txt"
+    target.write_bytes(b"original")
+    snapshot = read_snapshot(tmp_path, target.name)
+    manager.conversation_history.append(HumanMessage(content="Другое сообщение"))
+
+    async def invoke(messages):
+        assert len(messages) == 2
+        assert '"path": "notes.txt"' in messages[-1].content
+        assert '"content": "original"' in messages[-1].content
+        assert "Измени текст" in messages[-1].content
+        return AIMessage(content=content, response_metadata={"finish_reason": finish_reason})
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
+    if valid:
+        change = await manager.propose_file_edit(snapshot, "Измени текст")
+        assert "+new text\n" in change.diff()
+    else:
+        with pytest.raises(FileEditError):
+            await manager.propose_file_edit(snapshot, "Измени текст")
+    assert target.read_bytes() == b"original"
+    assert [message.content for message in manager.conversation_history] == ["Другое сообщение"]
+
 
 async def test_send_message_stream(manager, fake_giga):
     chunks = await collect(manager.send_message_stream("Привет?", "system"))
