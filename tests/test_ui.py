@@ -6,7 +6,7 @@ from textual.widgets import Input, Markdown
 
 from conftest import python_command
 from gigachat_cli.main import Main
-from gigachat_cli.screens import chat
+from gigachat_cli.utils import session
 from gigachat_cli.screens.chat import ChatScreen
 from gigachat_cli.screens.file_review import FileReviewScreen
 from gigachat_cli.screens.start import MenuApp
@@ -14,7 +14,7 @@ from gigachat_cli.utils.config import DEFAULT_MODEL, Config
 from gigachat_cli.utils.core import StreamChunk
 from gigachat_cli.utils.command import split_command_arguments
 from gigachat_cli.widgets.file_list import FileList
-from gigachat_cli.handler.file_edit import chat_manager
+from gigachat_cli.utils.core import chat_manager
 
 
 class ChatApp(App):
@@ -44,7 +44,7 @@ class FakeAnswers:
 def answers(monkeypatch):
     def install(chunks, hang=False):
         fake = FakeAnswers(chunks, hang)
-        monkeypatch.setattr(chat, "get_answer_stream", fake)
+        monkeypatch.setattr(session, "get_answer_stream", fake)
         return fake
     return install
 
@@ -65,7 +65,7 @@ async def send(pilot, text: str) -> None:
     screen = pilot.app.screen
     screen.query_one("#message_input", Input).value = text
     await pilot.press("enter")
-    task = screen.current_stream_task
+    task = screen.session.task
     if task is not None:
         await asyncio.wait_for(asyncio.shield(task), timeout=30)
     await pilot.pause()
@@ -80,9 +80,9 @@ async def test_streamed_answer_is_displayed(answers):
 
         assert "**Вы:** Здравствуй" in chat_text(screen)
         assert "Привет!" in chat_text(screen)
-        assert fake.calls == [("Здравствуй", str(screen.command_utils.get_current_directory()))]
+        assert fake.calls == [("Здравствуй", str(screen.session.directory))]
         assert screen.query_one("#message_input", Input).value == ""
-        assert not screen.is_processing_stream
+        assert not screen.session.busy
         assert screen.current_typing_indicator is None
 
 
@@ -158,14 +158,14 @@ async def test_escape_cancels_request(answers):
         screen.query_one("#message_input", Input).value = "Долгий вопрос"
         await pilot.press("enter")
         await pilot.pause(0.2)
-        task = screen.current_stream_task
-        assert screen.is_processing_stream
+        task = screen.session.task
+        assert screen.session.busy
 
         await pilot.press("escape")
         await pilot.pause()
 
         assert task.done()
-        assert not screen.is_processing_stream
+        assert not screen.session.busy
         assert "Запрос отменен пользователем" in chat_text(screen)
         assert "думаю..." in chat_text(screen)
 
@@ -180,12 +180,12 @@ async def test_cancellation_keeps_draft_and_allows_next_request(answers):
         await pilot.pause()
         input_field.value = "/he"
         await pilot.pause()
-        task = screen.current_stream_task
+        task = screen.session.task
         await pilot.press("ctrl+c")
         await asyncio.wait_for(asyncio.shield(task), timeout=5)
         assert input_field.value == "/he"
         assert "Частичный ответ" in chat_text(screen)
-        assert not screen.is_processing_stream
+        assert not screen.session.busy
         answers([StreamChunk("Следующий ответ", is_final=True)])
         await send(pilot, "Следующий запрос")
         assert "Частичный ответ" in chat_text(screen)
@@ -203,14 +203,14 @@ async def test_terminal_command_keeps_draft(answers, monkeypatch):
 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        monkeypatch.setattr(screen.command_utils, "execute_system_command", execute)
+        monkeypatch.setattr(screen.session, "execute_command", execute)
         input_field = screen.query_one("#message_input", Input)
         input_field.value = "!test"
         await pilot.press("enter")
         await asyncio.wait_for(started.wait(), timeout=5)
         assert input_field.value == ""
         input_field.value = "Черновик"
-        task = screen.current_stream_task
+        task = screen.session.task
         finish.set()
         await asyncio.wait_for(asyncio.shield(task), timeout=5)
         assert input_field.value == "Черновик"
@@ -232,13 +232,13 @@ async def test_cancel_waits_for_cleanup_before_next_request(answers):
 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        original = chat.get_answer_stream
-        chat.get_answer_stream = stream
+        original = session.get_answer_stream
+        session.get_answer_stream = stream
         try:
             screen.query_one(Input).value = "Первый"
             await pilot.press("enter")
             await pilot.pause()
-            task = screen.current_stream_task
+            task = screen.session.task
             await pilot.press("escape")
             await asyncio.wait_for(cancelling.wait(), timeout=5)
             await pilot.press("escape")
@@ -246,13 +246,13 @@ async def test_cancel_waits_for_cleanup_before_next_request(answers):
             screen.query_one(Input).value = "Второй"
             await pilot.press("enter")
             assert calls == ["Первый"]
-            assert screen.is_processing_stream
+            assert screen.session.busy
             release.set()
             await asyncio.wait_for(asyncio.shield(task), timeout=5)
-            assert not screen.is_processing_stream
+            assert not screen.session.busy
         finally:
             release.set()
-            chat.get_answer_stream = original
+            session.get_answer_stream = original
 
 
 async def test_second_enter_ignored_while_processing(answers):
@@ -291,7 +291,7 @@ async def test_terminal_cd_updates_project_path(answers, tmp_path):
 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = tmp_path
+        screen.session._commands.current_directory = tmp_path
 
         await send(pilot, "!cd sub/")
         await send(pilot, "вопрос")
@@ -307,7 +307,7 @@ async def test_directory_selection_opens_children_until_file(answers, tmp_path, 
     (nested / "notes.txt").write_text("notes", encoding="utf-8")
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = tmp_path
+        screen.session._commands.current_directory = tmp_path
         field = screen.query_one(Input)
         files = screen.query_one(FileList)
         field.value = command
@@ -317,7 +317,7 @@ async def test_directory_selection_opens_children_until_file(answers, tmp_path, 
             assert files.files == [expected]
             await pilot.press("enter")
             await pilot.pause()
-            assert not screen.is_processing_stream
+            assert not screen.session.busy
         assert files.has_class("hidden")
         assert split_command_arguments(field.value)[-1].value == "My Docs/Вложенная папка/notes.txt"
         assert fake.calls == []
@@ -328,7 +328,7 @@ async def test_cd_selected_directory_can_be_executed_with_escape(answers, tmp_pa
     (tmp_path / "folder" / "child").mkdir()
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = tmp_path
+        screen.session._commands.current_directory = tmp_path
         screen.query_one(Input).value = "!cd "
         await pilot.pause()
         await pilot.press("enter")
@@ -336,17 +336,17 @@ async def test_cd_selected_directory_can_be_executed_with_escape(answers, tmp_pa
         assert not screen.query_one(FileList).has_class("hidden")
         await pilot.press("escape")
         await pilot.press("enter")
-        task = screen.current_stream_task
+        task = screen.session.task
         if task:
             await asyncio.wait_for(asyncio.shield(task), timeout=5)
-        assert screen.command_utils.get_current_directory() == (tmp_path / "folder").resolve()
+        assert screen.session.directory == (tmp_path / "folder").resolve()
 
 
 async def test_empty_directory_selection_closes_completion(answers, tmp_path):
     (tmp_path / "empty").mkdir()
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = tmp_path
+        screen.session._commands.current_directory = tmp_path
         field = screen.query_one(Input)
         field.value = "!cd "
         await pilot.pause()
@@ -354,12 +354,12 @@ async def test_empty_directory_selection_closes_completion(answers, tmp_path):
         await pilot.pause()
         assert field.value == "!cd empty/"
         assert screen.query_one(FileList).has_class("hidden")
-        assert screen.command_utils.get_current_directory() == tmp_path
+        assert screen.session.directory == tmp_path
         await pilot.press("enter")
-        task = screen.current_stream_task
+        task = screen.session.task
         if task:
             await asyncio.wait_for(asyncio.shield(task), timeout=5)
-        assert screen.command_utils.get_current_directory() == (tmp_path / "empty").resolve()
+        assert screen.session.directory == (tmp_path / "empty").resolve()
 
 
 @pytest.mark.parametrize("size", [(80, 24), (120, 40), (60, 24)])
@@ -375,7 +375,7 @@ async def test_file_edit_review_confirm_and_undo(tmp_path, monkeypatch, size):
     monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
     async with ChatApp().run_test(size=size) as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = tmp_path
+        screen.session._commands.current_directory = tmp_path
         command = f'/edit "{target.name}" Обнови текст'
         await send(pilot, command)
         review = pilot.app.screen
@@ -416,7 +416,7 @@ async def test_file_creation_is_rechecked_at_confirmation(tmp_path, monkeypatch)
     monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = tmp_path
+        screen.session._commands.current_directory = tmp_path
         await send(pilot, "/edit new.txt Добавь текст")
         assert isinstance(pilot.app.screen, FileReviewScreen)
         assert not target.exists()
@@ -441,7 +441,7 @@ async def test_file_edit_can_be_cancelled_while_waiting(tmp_path, monkeypatch):
     monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = tmp_path
+        screen.session._commands.current_directory = tmp_path
         screen.query_one(Input).value = "/edit new.txt Добавь текст"
         await pilot.press("enter")
         await asyncio.wait_for(started.wait(), timeout=5)
@@ -449,7 +449,7 @@ async def test_file_edit_can_be_cancelled_while_waiting(tmp_path, monkeypatch):
         await asyncio.wait_for(stopped.wait(), timeout=5)
         await pilot.pause()
         assert pilot.app.screen is screen
-        assert not screen.is_processing_stream
+        assert not screen.session.busy
         assert "Запрос отменен" in chat_text(screen)
         assert not (tmp_path / "new.txt").exists()
 
@@ -495,7 +495,7 @@ async def test_status_bar_shows_directory_on_narrow_screen(answers, tmp_path):
 
     async with ChatApp().run_test(size=(60, 40)) as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = long_dir
+        screen.session._commands.current_directory = long_dir
         screen._update_directory_display()
         await pilot.pause()
 

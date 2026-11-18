@@ -2,14 +2,15 @@
 
 import argparse
 import asyncio
+from contextlib import aclosing
 import json
-import os
 import sys
 import time
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Dict, List, Optional, TextIO
 
-from gigachat_cli.utils.core import chat_manager, get_answer_stream
+from gigachat_cli.utils.core import chat_manager
+from gigachat_cli.utils.session import ChatSession
 
 
 OUTPUT_FORMATS = ("text", "json", "stream-json")
@@ -114,25 +115,27 @@ async def run_prompt(prompt: str, output_format: str, stdout: TextIO, stderr: Te
         int: Код возврата
     """
     started = time.monotonic()
-    model = chat_manager.get_current_model()
+    session = ChatSession()
+    model = session.get_model()
     response: List[str] = []
     error: Optional[str] = None
 
     if output_format == "stream-json":
         _write_json(stdout, {"type": "start", "model": model})
 
-    async for chunk in get_answer_stream(prompt, project_path=os.getcwd()):
-        if chunk.content:
-            response.append(chunk.content)
-            if output_format == "text":
-                stdout.write(chunk.content)
-                stdout.flush()
-            elif output_format == "stream-json":
-                _write_json(stdout, {"type": "chunk", "content": chunk.content})
-        if chunk.error:
-            error = chunk.error
-        if chunk.is_final:
-            break
+    async with aclosing(session.answer(prompt)) as stream:
+        async for chunk in stream:
+            if chunk.content:
+                response.append(chunk.content)
+                if output_format == "text":
+                    stdout.write(chunk.content)
+                    stdout.flush()
+                elif output_format == "stream-json":
+                    _write_json(stdout, {"type": "chunk", "content": chunk.content})
+            if chunk.error:
+                error = chunk.error
+            if chunk.is_final:
+                break
 
     result = {
         "type": "result",

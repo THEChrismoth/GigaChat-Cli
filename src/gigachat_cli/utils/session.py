@@ -1,0 +1,82 @@
+"""Операции рабочей сессии, общие для терминального интерфейса и CLI."""
+
+import asyncio
+from contextlib import aclosing
+from pathlib import Path
+from typing import AsyncGenerator, Callable, Coroutine
+
+from gigachat_cli.utils.command import CommandUtils
+from gigachat_cli.utils.core import StreamChunk, chat_manager, get_answer_stream
+from gigachat_cli.utils.file import FileUtils
+from gigachat_cli.utils.file_edit import FileEdit, FileEditError, FileSnapshot, read_snapshot
+
+
+class ChatSession:
+    """Связать запросы и файловые операции с текущей рабочей директорией."""
+
+    def __init__(self) -> None:
+        """Начать сессию без активной операции и сохранённой правки."""
+        self._commands = CommandUtils()
+        self.completion = FileUtils(self._commands)
+        self._undo: FileEdit | None = None
+        self.task: asyncio.Task[None] | None = None
+
+    @property
+    def directory(self) -> Path:
+        """Вернуть текущую рабочую директорию."""
+        return self._commands.get_current_directory()
+
+    @property
+    def busy(self) -> bool:
+        """Проверить, завершилась ли активная операция вместе с её очисткой."""
+        return self.task is not None and not self.task.done()
+
+    def start(self, operation: Callable[[], Coroutine[None, None, None]]) -> bool:
+        """Запустить операцию, если сессия свободна."""
+        if self.busy:
+            return False
+        self.task = asyncio.create_task(operation())
+        return True
+
+    def cancel(self) -> None:
+        """Запросить отмену операции, не прерывая уже начатую очистку."""
+        task = self.task
+        if task is not None and not task.done() and not task.cancelling():
+            task.cancel()
+
+    def get_model(self) -> str:
+        """Вернуть выбранную модель."""
+        return chat_manager.get_current_model()
+
+    def set_model(self, model: str) -> None:
+        """Сохранить выбранную модель."""
+        chat_manager.config.set_model(model)
+
+    async def answer(self, prompt: str) -> AsyncGenerator[StreamChunk, None]:
+        """Ответить с учётом истории модели и рабочей директории сессии."""
+        async with aclosing(get_answer_stream(prompt, project_path=str(self.directory))) as stream:
+            async for chunk in stream:
+                yield chunk
+
+    async def execute_command(self, command: str) -> tuple[bool, str, int]:
+        """Выполнить введённую пользователем команду в рабочей директории."""
+        return await self._commands.execute_system_command(command)
+
+    def snapshot(self, path: str) -> FileSnapshot:
+        """Прочитать выбранный пользователем файл относительно рабочей директории."""
+        return read_snapshot(self.directory, path)
+
+    async def propose_edit(self, snapshot: FileSnapshot, instruction: str) -> FileEdit:
+        """Подготовить предлагаемое содержимое из снимка и задания."""
+        return await chat_manager.propose_file_edit(snapshot, instruction)
+
+    def undo_edit(self) -> FileEdit:
+        """Вернуть предложение для отката последней применённой правки."""
+        if self._undo is None:
+            raise FileEditError("В этом чате нет правки для отката.")
+        return self._undo
+
+    def apply_edit(self, edit: FileEdit) -> None:
+        """Применить подтверждённую правку и обновить доступный откат."""
+        inverse = edit.apply()
+        self._undo = None if edit is self._undo else inverse

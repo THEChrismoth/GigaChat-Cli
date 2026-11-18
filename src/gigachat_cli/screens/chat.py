@@ -2,6 +2,7 @@
 
 import importlib.resources
 import asyncio
+from contextlib import aclosing
 from typing import Optional
 
 from textual.app import ComposeResult
@@ -10,12 +11,9 @@ from textual.screen import Screen
 from textual.containers import VerticalScroll, Horizontal
 from textual import events
 
-from gigachat_cli.utils.config import Config
-from gigachat_cli.utils.core import get_answer_stream
-from gigachat_cli.utils.command import CommandUtils
+from gigachat_cli.utils.session import ChatSession
 from gigachat_cli.utils.list import ListUtils
 from gigachat_cli.utils.selector import SelectorManager
-from gigachat_cli.utils.file import FileUtils
 
 from gigachat_cli.handler.help import HelpHandler
 from gigachat_cli.handler.file_edit import FileEditHandler
@@ -34,7 +32,7 @@ from gigachat_cli.widgets.typing import TypingIndicator
 class ChatScreen(Screen):
     """Экран чата с GigaChat.
 
-    Сообщение обрабатывается одной задачей (current_stream_task): команды /exit и /menu,
+    Сообщение обрабатывается одной задачей сессии: команды /exit и /menu,
     обработчики команд (/help, /model, !команда) или запрос к GigaChat.
     Пока задача выполняется, повторная отправка игнорируется, а Esc/Ctrl+C отменяет ее.
     """
@@ -44,10 +42,8 @@ class ChatScreen(Screen):
     def __init__(self):
         """Создание экрана, утилит и обработчиков команд."""
         super().__init__()
-        self.command_utils = CommandUtils()
+        self.session = ChatSession()
         self.list_utils = ListUtils()
-        self.file_utils = FileUtils(self.command_utils)
-        self.cfg = Config()
 
         self.selector_manager = SelectorManager(self)
 
@@ -55,16 +51,13 @@ class ChatScreen(Screen):
         self.handlers =[
             HelpHandler(),
             FileEditHandler(),
-            ModelHandler(self.cfg, self),
-            TerminalHandler(self.command_utils)
+            ModelHandler(self.session, self),
+            TerminalHandler()
         ]
 
         # Состояние обработки текущего сообщения
         self.current_typing_indicator: Optional[TypingIndicator] = None
-        self.current_stream_task: Optional[asyncio.Task] = None
         self.current_response_content: str = ""
-        self.is_processing_stream: bool = False
-        self.last_user_message: str = ""
         self.completed_exchanges: list[str] = []
         self.current_exchange: str = ""
         self._display_revision = 0
@@ -105,9 +98,7 @@ class ChatScreen(Screen):
 
     def _cleanup_stream_processing(self):
         """Отмена текущей обработки сообщения и сброс ее состояния."""
-        if self.current_stream_task and not self.current_stream_task.done():
-            self.current_stream_task.cancel()
-        self.is_processing_stream = False
+        self.session.cancel()
         self.current_response_content = ""
         self._hide_typing_indicator()
 
@@ -133,8 +124,8 @@ class ChatScreen(Screen):
             command_list.update_commands(filtered_commands, input_field.value)
             file_list.add_class("hidden")
 
-        elif self.file_utils.should_show_files(input_field.value):
-            files, current_command, current_path = self.file_utils.get_files_for_completion(input_field.value)
+        elif self.session.completion.should_show_files(input_field.value):
+            files, current_command, current_path = self.session.completion.get_files_for_completion(input_field.value)
             if files:
                 file_list.update_files(files, current_command, current_path)
                 command_list.add_class("hidden")
@@ -169,13 +160,10 @@ class ChatScreen(Screen):
             event.prevent_default()
             return
 
-        if self.is_processing_stream:
+        if not self.session.start(self._run_message_processing):
             event.prevent_default()
             return
 
-        # Флаг ставится сразу, чтобы повторный Enter не запустил вторую обработку
-        self.is_processing_stream = True
-        self.current_stream_task = asyncio.create_task(self._run_message_processing())
         command_list.add_class("hidden")
         file_list.add_class("hidden")
         event.prevent_default()
@@ -191,9 +179,8 @@ class ChatScreen(Screen):
         command_list = self.query_one("#command_list", CommandList)
         file_list = self.query_one("#file_list", FileList)
 
-        if event.key == "ctrl+c" and self.is_processing_stream:
-            if self.current_stream_task and not self.current_stream_task.cancelling():
-                self.current_stream_task.cancel()
+        if event.key == "ctrl+c" and self.session.busy:
+            self.session.cancel()
             event.prevent_default()
             event.stop()
             return
@@ -248,9 +235,8 @@ class ChatScreen(Screen):
                 self.query_one("#message_input").focus()
 
         # Отмена запроса к GigaChat или терминальной команды
-        elif event.key in ("escape", "ctrl+c") and self.is_processing_stream:
-            if self.current_stream_task and not self.current_stream_task.cancelling():
-                self.current_stream_task.cancel()
+        elif event.key in ("escape", "ctrl+c") and self.session.busy:
+            self.session.cancel()
             event.prevent_default()
             event.stop()
 
@@ -268,9 +254,7 @@ class ChatScreen(Screen):
                 self.update_chat_display(f"{self.current_exchange}\n\n**Ошибка:** {error}")
         finally:
             self._hide_typing_indicator()
-            self.is_processing_stream = False
             self.current_response_content = ""
-            self.current_stream_task = None
 
     async def process_message(self) -> None:
         """Обработка введенного сообщения: команды приложения, обработчики или запрос к GigaChat."""
@@ -279,8 +263,6 @@ class ChatScreen(Screen):
 
         if not user_text:
             return
-
-        self.last_user_message = user_text
 
         if user_text.lower().startswith('/exit'):
             self.app.exit("Результат работы")
@@ -324,14 +306,14 @@ class ChatScreen(Screen):
     def _update_model_display(self) -> None:
         """Обновление названия модели в строке состояния."""
         model_widget = self.query_one(Model)
-        current_model = self.cfg.get_model()
+        current_model = self.session.get_model()
         model_widget.current_model = str(current_model)
         model_widget.refresh()
 
     def _update_directory_display(self) -> None:
         """Обновление текущей директории в строке состояния."""
         dir_widget = self.query_one(Dir)
-        current_dir = self.command_utils.get_current_directory()
+        current_dir = self.session.directory
         dir_widget.current_dir = str(current_dir)
         dir_widget.refresh()
 
@@ -401,28 +383,27 @@ class ChatScreen(Screen):
         self.current_response_content = ""
         has_content = False
 
-        project_path = str(self.command_utils.get_current_directory())
-
         try:
-            async for chunk in get_answer_stream(user_text, project_path=project_path):
-                # С первой частью ответа индикатор ожидания больше не нужен
-                if chunk.content and not has_content:
-                    has_content = True
-                    self._hide_typing_indicator()
+            async with aclosing(self.session.answer(user_text)) as stream:
+                async for chunk in stream:
+                    # С первой частью ответа индикатор ожидания больше не нужен
+                    if chunk.content and not has_content:
+                        has_content = True
+                        self._hide_typing_indicator()
 
-                if chunk.content:
-                    self.current_response_content += chunk.content
-                    self.update_chat_display_stream(user_text, self.current_response_content)
+                    if chunk.content:
+                        self.current_response_content += chunk.content
+                        self.update_chat_display_stream(user_text, self.current_response_content)
 
-                if chunk.error:
-                    self._show_stream_error(user_text, chunk.error)
-                    break
+                    if chunk.error:
+                        self._show_stream_error(user_text, chunk.error)
+                        break
 
-                if chunk.is_final:
-                    break
+                    if chunk.is_final:
+                        break
 
-                # Небольшая пауза для плавного отображения
-                await asyncio.sleep(0.01)
+                    # Небольшая пауза для плавного отображения
+                    await asyncio.sleep(0.01)
 
         except Exception as e:
             self._show_stream_error(user_text, str(e))

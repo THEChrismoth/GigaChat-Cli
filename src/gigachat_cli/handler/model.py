@@ -2,20 +2,20 @@
 
 from textual.widgets import Input
 
-from gigachat_cli.utils.config import Config
+from gigachat_cli.utils.session import ChatSession
 
 
 class ModelHandler:
     """Обработчик команды /model: показ списка моделей и сохранение выбора."""
 
-    def __init__(self, cfg: Config, screen=None):
+    def __init__(self, session: ChatSession, screen=None):
         """Создание обработчика.
 
         Args:
-            cfg: Конфигурация, в которую сохраняется выбранная модель
+            session: Конфигурация, в которую сохраняется выбранная модель
             screen: Экран чата для отображения результата выбора
         """
-        self.cfg = cfg
+        self.session = session
         self.screen = screen
         # Идентификатор модели в API -> название для пользователя
         self.model_names = {
@@ -67,6 +67,6 @@ class ModelHandler:
                 break
 
         if model_key:
-            self.cfg.set_model(model_key)
+            self.session.set_model(model_key)
             self.screen.update_chat_display(f"**Система:** ✅ Выбрана модель: **{selected_item}**")
             self.screen._update_model_display()

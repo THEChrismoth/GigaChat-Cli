@@ -9,15 +9,6 @@ from gigachat_cli.widgets.typing import TypingIndicator
 class TerminalHandler:
     """Обработчик терминальных команд: выполнение и вывод результата в чат."""
 
-    def __init__(self, command_utils: CommandUtils):
-        """Создание обработчика.
-
-        Args:
-            command_utils: Утилита выполнения команд (хранит текущую директорию)
-        """
-        super().__init__()
-        self.command_utils = command_utils
-
     async def handle(self, user_text: str, input_field: Input, screen) -> bool:
         """Выполнение терминальной команды и вывод результата в чат.
 
@@ -38,7 +29,7 @@ class TerminalHandler:
             chat_container = screen.query_one("#chat_container")
             chat_container.mount(screen.current_typing_indicator)
 
-            success, output, return_code = await self.command_utils.execute_system_command(command)
+            success, output, return_code = await screen.session.execute_command(command)
 
             if screen.current_typing_indicator:
                 screen.current_typing_indicator.stop_animation()

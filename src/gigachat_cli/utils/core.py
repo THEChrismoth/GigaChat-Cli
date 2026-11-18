@@ -261,10 +261,9 @@ class GigaChatManager:
                 if chunk.content:
                     full_response += chunk.content
 
-                yield chunk
-
                 if chunk.is_final:
                     break
+                yield chunk
 
             if full_response:
                 self.conversation_history.append(HumanMessage(content=history_prompt or prompt))
@@ -272,6 +271,8 @@ class GigaChatManager:
 
                 if len(self.conversation_history) > 20:
                     self.conversation_history = self.conversation_history[-20:]
+
+            yield StreamChunk(content="", is_final=True)
 
         except Exception as e:
             yield StreamChunk(content="", is_final=True, error=self._format_error(str(e)))
