@@ -4,7 +4,7 @@ import re
 from string import punctuation
 from typing import TYPE_CHECKING
 
-from textual.widgets import Input
+from gigachat_cli.widgets.message_input import MessageInput
 
 from gigachat_cli.screens.file_review import FileReviewScreen
 from gigachat_cli.core.command import split_command_arguments
@@ -22,13 +22,13 @@ def _escape_markdown(text: str) -> str:
 class FileEditHandler:
     """Показать предложения модели и запросить подтверждение записи."""
 
-    async def handle(self, user_text: str, input_field: Input, screen: "ChatScreen") -> bool:
+    async def handle(self, user_text: str, input_field: MessageInput, screen: "ChatScreen") -> bool:
         """Подготовить правку или показать обратное изменение."""
         command = user_text.split(maxsplit=1)[0]
         if command not in {"/edit", "/undo"}:
             return False
 
-        input_field.value = ""
+        input_field.text = ""
         undo = command == "/undo"
         try:
             if undo:

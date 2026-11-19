@@ -1,12 +1,12 @@
 """Обработчик команды /help: краткая справка в чате."""
 
-from textual.widgets import Input
+from gigachat_cli.widgets.message_input import MessageInput
 
 
 class HelpHandler:
     """Обработчик команды /help."""
 
-    async def handle(self, user_text: str, input_field: Input, screen) -> bool:
+    async def handle(self, user_text: str, input_field: MessageInput, screen) -> bool:
         """Вывод справки по командам в чат.
 
         Args:
@@ -39,7 +39,9 @@ class HelpHandler:
 
 - `Tab`/`Shift+Tab` — навигация по автодополнению или переключение фокуса без списка
 - `↑`/`↓` - навигация в селекторах
-- `Enter` - подтвердить выбор
+- `Enter` — отправить сообщение или подтвердить выбор
+- `F2` — новая строка
+- `F3`/`F4` — история запросов и возврат к черновику
 - `Esc` - отмена выбора / прерывание запроса или команды
 - `Ctrl+C` — прерывание запроса даже при открытом автодополнении
 
@@ -51,6 +53,6 @@ class HelpHandler:
         screen.update_chat_display(help_text)
         
         # Очистка поля ввода
-        input_field.value = ""
+        input_field.text = ""
         
         return True

@@ -11,8 +11,10 @@ class FakeInput:
     """Заглушка поля ввода"""
 
     def __init__(self):
-        self.value = ""
-        self.cursor_position = 0
+        self.text = ""
+
+    def move_cursor(self, location):
+        pass
 
     def focus(self):
         pass
@@ -42,7 +44,7 @@ def complete(file_utils, text):
     file_list.update_files(files, command, current_path)
     field = FakeInput()
     file_list.apply_selection(field)
-    return files, field.value
+    return files, field.text
 
 
 windows_only = pytest.mark.skipif(os.name != "nt", reason="Обратный слеш разделяет путь только на Windows")

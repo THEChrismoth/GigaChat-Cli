@@ -46,7 +46,6 @@ class SelectorManager:
         # Пока открыт список, ввод сообщений заблокирован
         message_input = self.screen.query_one("#message_input")
         message_input.disabled = True
-        message_input.placeholder = ""
         message_input.blur()
 
         self.selector_widget = SelectorWidget()
@@ -94,7 +93,6 @@ class SelectorManager:
 
             message_input = self.screen.query_one("#message_input")
             message_input.disabled = False
-            message_input.placeholder = "Введите сообщение... (Нажмите Enter для отправки)"
             message_input.focus()
 
             if self.selector_callback:
@@ -113,7 +111,6 @@ class SelectorManager:
 
             message_input = self.screen.query_one("#message_input")
             message_input.disabled = False
-            message_input.placeholder = "Введите сообщение... (Нажмите Enter для отправки)"
             message_input.focus()
 
             self.selector_active = False

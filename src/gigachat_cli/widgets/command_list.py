@@ -1,6 +1,6 @@
 """Выпадающий список автодополнения команд (/help, /model и т.д.)."""
 
-from textual.widgets import Static
+from textual.widgets import Static, TextArea
 from textual.reactive import reactive
 
 
@@ -109,7 +109,8 @@ class CommandList(Static):
             else:
                 new_text = selected_cmd
 
-            input_field.value = new_text
-            input_field.cursor_position = len(new_text)
+            with input_field.prevent(TextArea.Changed):
+                input_field.text = new_text
+            input_field.move_cursor((0, len(new_text)))
             self.add_class("hidden")
             input_field.focus()

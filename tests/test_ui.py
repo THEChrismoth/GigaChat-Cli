@@ -2,7 +2,10 @@ import asyncio
 
 import pytest
 from textual.app import App
-from textual.widgets import Input, Markdown
+from textual import events
+from textual.widgets import Markdown
+
+from gigachat_cli.widgets.message_input import MessageInput
 
 from conftest import python_command
 from gigachat_cli.main import Main
@@ -63,7 +66,7 @@ def chat_text(screen) -> str:
 async def send(pilot, text: str) -> None:
     """Ввод сообщения и ожидание окончания его обработки"""
     screen = pilot.app.screen
-    screen.query_one("#message_input", Input).value = text
+    screen.query_one("#message_input", MessageInput).text = text
     await pilot.press("enter")
     task = screen.session.task
     if task is not None:
@@ -81,7 +84,7 @@ async def test_streamed_answer_is_displayed(answers):
         assert "**Вы:** Здравствуй" in chat_text(screen)
         assert "Привет!" in chat_text(screen)
         assert fake.calls == [("Здравствуй", str(screen.session.directory))]
-        assert screen.query_one("#message_input", Input).value == ""
+        assert screen.query_one("#message_input", MessageInput).text == ""
         assert not screen.session.busy
         assert screen.current_typing_indicator is None
 
@@ -155,7 +158,7 @@ async def test_escape_cancels_request(answers):
 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.query_one("#message_input", Input).value = "Долгий вопрос"
+        screen.query_one("#message_input", MessageInput).text = "Долгий вопрос"
         await pilot.press("enter")
         await pilot.pause(0.2)
         task = screen.session.task
@@ -174,16 +177,16 @@ async def test_cancellation_keeps_draft_and_allows_next_request(answers):
     answers([StreamChunk("Частичный ответ")], hang=True)
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        input_field = screen.query_one("#message_input", Input)
-        input_field.value = "Первый запрос"
+        input_field = screen.query_one("#message_input", MessageInput)
+        input_field.text = "Первый запрос"
         await pilot.press("enter")
         await pilot.pause()
-        input_field.value = "/he"
+        input_field.text = "/he"
         await pilot.pause()
         task = screen.session.task
         await pilot.press("ctrl+c")
         await asyncio.wait_for(asyncio.shield(task), timeout=5)
-        assert input_field.value == "/he"
+        assert input_field.text == "/he"
         assert "Частичный ответ" in chat_text(screen)
         assert not screen.session.busy
         answers([StreamChunk("Следующий ответ", is_final=True)])
@@ -204,16 +207,16 @@ async def test_terminal_command_keeps_draft(answers, monkeypatch):
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
         monkeypatch.setattr(screen.session, "execute_command", execute)
-        input_field = screen.query_one("#message_input", Input)
-        input_field.value = "!test"
+        input_field = screen.query_one("#message_input", MessageInput)
+        input_field.text = "!test"
         await pilot.press("enter")
         await asyncio.wait_for(started.wait(), timeout=5)
-        assert input_field.value == ""
-        input_field.value = "Черновик"
+        assert input_field.text == ""
+        input_field.text = "Черновик"
         task = screen.session.task
         finish.set()
         await asyncio.wait_for(asyncio.shield(task), timeout=5)
-        assert input_field.value == "Черновик"
+        assert input_field.text == "Черновик"
 
 
 async def test_cancel_waits_for_cleanup_before_next_request(answers):
@@ -235,7 +238,7 @@ async def test_cancel_waits_for_cleanup_before_next_request(answers):
         original = session.get_answer_stream
         session.get_answer_stream = stream
         try:
-            screen.query_one(Input).value = "Первый"
+            screen.query_one(MessageInput).text = "Первый"
             await pilot.press("enter")
             await pilot.pause()
             task = screen.session.task
@@ -243,7 +246,7 @@ async def test_cancel_waits_for_cleanup_before_next_request(answers):
             await asyncio.wait_for(cancelling.wait(), timeout=5)
             await pilot.press("escape")
             assert not task.done()
-            screen.query_one(Input).value = "Второй"
+            screen.query_one(MessageInput).text = "Второй"
             await pilot.press("enter")
             assert calls == ["Первый"]
             assert screen.session.busy
@@ -260,11 +263,11 @@ async def test_second_enter_ignored_while_processing(answers):
 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        input_field = screen.query_one("#message_input", Input)
-        input_field.value = "первый"
+        input_field = screen.query_one("#message_input", MessageInput)
+        input_field.text = "первый"
         await pilot.press("enter")
         await pilot.pause(0.2)
-        input_field.value = "второй"
+        input_field.text = "второй"
         await pilot.press("enter")
         await pilot.pause(0.2)
 
@@ -308,9 +311,9 @@ async def test_directory_selection_opens_children_until_file(answers, tmp_path, 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
         screen.session._commands.current_directory = tmp_path
-        field = screen.query_one(Input)
+        field = screen.query_one(MessageInput)
         files = screen.query_one(FileList)
-        field.value = command
+        field.text = command
         await pilot.pause()
         for expected in ["My Docs", "Вложенная папка", "notes.txt"]:
             assert not files.has_class("hidden")
@@ -319,7 +322,7 @@ async def test_directory_selection_opens_children_until_file(answers, tmp_path, 
             await pilot.pause()
             assert not screen.session.busy
         assert files.has_class("hidden")
-        assert split_command_arguments(field.value)[-1].value == "My Docs/Вложенная папка/notes.txt"
+        assert split_command_arguments(field.text)[-1].value == "My Docs/Вложенная папка/notes.txt"
         assert fake.calls == []
 
 
@@ -329,7 +332,7 @@ async def test_cd_selected_directory_can_be_executed_with_escape(answers, tmp_pa
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
         screen.session._commands.current_directory = tmp_path
-        screen.query_one(Input).value = "!cd "
+        screen.query_one(MessageInput).text = "!cd "
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
@@ -347,12 +350,12 @@ async def test_empty_directory_selection_closes_completion(answers, tmp_path):
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
         screen.session._commands.current_directory = tmp_path
-        field = screen.query_one(Input)
-        field.value = "!cd "
+        field = screen.query_one(MessageInput)
+        field.text = "!cd "
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        assert field.value == "!cd empty/"
+        assert field.text == "!cd empty/"
         assert screen.query_one(FileList).has_class("hidden")
         assert screen.session.directory == tmp_path
         await pilot.press("enter")
@@ -442,7 +445,7 @@ async def test_file_edit_can_be_cancelled_while_waiting(tmp_path, monkeypatch):
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
         screen.session._commands.current_directory = tmp_path
-        screen.query_one(Input).value = "/edit new.txt Добавь текст"
+        screen.query_one(MessageInput).text = "/edit new.txt Добавь текст"
         await pilot.press("enter")
         await asyncio.wait_for(started.wait(), timeout=5)
         await pilot.press("escape")
@@ -524,6 +527,54 @@ def test_shorten_home(monkeypatch, tmp_path, path, expected):
     values = {"home": str(home), "sep": os.sep, "other": other}
 
     assert shorten_home(path.format(**values)) == expected.format(**values)
+
+
+async def test_multiline_input_and_history_restore_a_draft(answers):
+    fake = answers([StreamChunk("Ответ", is_final=True)])
+    async with ChatApp().run_test(size=(80, 24)) as pilot:
+        screen = pilot.app.screen
+        field = screen.query_one(MessageInput)
+        field.text = "  первый отступ"
+        field.move_cursor(field.document.end)
+        await pilot.press("f2")
+        assert field.text == "  первый отступ\n"
+        assert field.cursor_location == (1, 0)
+        pilot.app.post_message(events.Paste("    строка кода\n  строка лога"))
+        await pilot.pause()
+        request = "  первый отступ\n    строка кода\n  строка лога"
+        assert field.text == request
+        assert field.size.height == 3
+        assert fake.calls == []
+        await pilot.press("enter")
+        await pilot.pause()
+        assert fake.calls[0][0] == request
+        assert request in chat_text(screen)
+        assert field.text == ""
+
+        field.text = "Черновик\n  с отступом"
+        await pilot.press("f3")
+        assert field.text == request
+        await pilot.press("f4")
+        assert field.text == "Черновик\n  с отступом"
+
+
+async def test_multiline_terminal_command_is_not_executed(answers, monkeypatch):
+    fake = answers([])
+
+    async def execute(command):
+        pytest.fail(f"Выполнена многострочная команда: {command!r}")
+
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        monkeypatch.setattr(screen.session, "execute_command", execute)
+        field = screen.query_one(MessageInput)
+        command = "!cd sub\nother"
+        field.text = command
+        await pilot.press("enter")
+        await pilot.pause()
+        assert field.text == command
+        assert fake.calls == []
+        assert "терминальная команда должна занимать одну строку" in chat_text(screen)
 
 
 async def test_main_app_starts_in_chat_and_menu_preserves_history(answers):

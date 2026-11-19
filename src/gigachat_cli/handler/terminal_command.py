@@ -1,6 +1,6 @@
 """Обработчик терминальных команд: сообщения, начинающиеся с !."""
 
-from textual.widgets import Input
+from gigachat_cli.widgets.message_input import MessageInput
 
 from gigachat_cli.core.command import CommandUtils
 from gigachat_cli.widgets.typing import TypingIndicator
@@ -9,7 +9,7 @@ from gigachat_cli.widgets.typing import TypingIndicator
 class TerminalHandler:
     """Обработчик терминальных команд: выполнение и вывод результата в чат."""
 
-    async def handle(self, user_text: str, input_field: Input, screen) -> bool:
+    async def handle(self, user_text: str, input_field: MessageInput, screen) -> bool:
         """Выполнение терминальной команды и вывод результата в чат.
 
         Args:
@@ -22,7 +22,7 @@ class TerminalHandler:
         """
         is_terminal, command = CommandUtils.is_terminal_command(user_text)
         if is_terminal:
-            input_field.value = ""
+            input_field.text = ""
             screen.update_chat_display(f"**Вы:** `!{command}`")
 
             screen.current_typing_indicator = TypingIndicator()

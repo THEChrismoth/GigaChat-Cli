@@ -1,6 +1,6 @@
 """Обработчик команды /model: выбор модели GigaChat."""
 
-from textual.widgets import Input
+from gigachat_cli.widgets.message_input import MessageInput
 
 from gigachat_cli.core.session import ChatSession
 
@@ -24,7 +24,7 @@ class ModelHandler:
             "GigaChat-2-Max": "GigaChat 2 Max",
         }
 
-    async def handle(self, user_text: str, input_field: Input, screen) -> bool:
+    async def handle(self, user_text: str, input_field: MessageInput, screen) -> bool:
         """Обработка команды /model: показ списка моделей для выбора.
 
         Args:
@@ -47,7 +47,7 @@ class ModelHandler:
                 callback=self._on_model_selected
             )
 
-            input_field.value = ""
+            input_field.text = ""
             input_field.focus()
             return True
 

@@ -2,7 +2,7 @@
 
 from contextlib import nullcontext
 
-from textual.widgets import Input, Static
+from textual.widgets import Static, TextArea
 from textual.reactive import reactive
 from pathlib import Path
 
@@ -118,11 +118,11 @@ class FileList(Static):
             self.add_class("hidden")
             # Для файла выбор завершён, а директория должна вызвать новый подбор содержимого.
             suppress_change = (
-                input_field.prevent(Input.Changed)
-                if isinstance(input_field, Input) and not is_directory
+                input_field.prevent(TextArea.Changed)
+                if isinstance(input_field, TextArea) and not is_directory
                 else nullcontext()
             )
             with suppress_change:
-                input_field.value = new_text
-            input_field.cursor_position = len(new_text)
+                input_field.text = new_text
+            input_field.move_cursor((0, len(new_text)))
             input_field.focus()

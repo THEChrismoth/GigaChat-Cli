@@ -2,11 +2,12 @@
 
 import importlib.resources
 import asyncio
+import re
 from contextlib import aclosing
 from typing import Optional
 
 from textual.app import ComposeResult
-from textual.widgets import Input, Markdown, Static
+from textual.widgets import Markdown, Static, TextArea
 from textual.screen import Screen
 from textual.containers import VerticalScroll, Horizontal
 from textual import events
@@ -22,6 +23,7 @@ from gigachat_cli.handler.terminal_command import TerminalHandler
 
 from gigachat_cli.widgets.command_list import CommandList
 from gigachat_cli.widgets.file_list import FileList
+from gigachat_cli.widgets.message_input import MessageInput
 from gigachat_cli.widgets.model import Model
 from gigachat_cli.widgets.dir import Dir
 from gigachat_cli.widgets.typing import TypingIndicator
@@ -78,10 +80,8 @@ class ChatScreen(Screen):
             yield Markdown("", id="chat_display")
         yield CommandList(id="command_list", classes="hidden")
         yield FileList(id="file_list", classes="hidden")
-        yield Input(
-            placeholder="Введите сообщение... (Нажмите Enter для отправки)",
-            id="message_input"
-        )
+        yield MessageInput(id="message_input")
+        yield Static("Enter отправить/выбрать · F2 перенос · F3/F4 история", id="composer_hint")
 
     def on_mount(self) -> None:
         """Фокус на поле ввода и заполнение строки состояния."""
@@ -109,26 +109,29 @@ class ChatScreen(Screen):
             self.current_typing_indicator.remove()
             self.current_typing_indicator = None
 
-    def on_input_changed(self, event: Input.Changed) -> None:
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Показ автодополнения команд (/...) или файлов (!команда ...).
 
         Args:
             event: Событие изменения текста в поле ввода
         """
-        input_field = event.input
+        input_field = event.text_area
         command_list = self.query_one("#command_list", CommandList)
         file_list = self.query_one("#file_list", FileList)
 
-        if self.list_utils.should_show_commands(input_field.value):
-            filtered_commands = self.list_utils.get_filtered_commands(input_field.value)
-            command_list.update_commands(filtered_commands, input_field.value)
+        if input_field.document.line_count > 1:
+            command_list.add_class("hidden")
+            file_list.add_class("hidden")
+        elif self.list_utils.should_show_commands(input_field.text):
+            filtered_commands = self.list_utils.get_filtered_commands(input_field.text)
+            command_list.update_commands(filtered_commands, input_field.text)
             file_list.add_class("hidden")
 
-        elif self.session.completion.should_show_files(input_field.value):
-            files, current_command, current_path = self.session.completion.get_files_for_completion(input_field.value)
+        elif self.session.completion.should_show_files(input_field.text):
+            command_list.add_class("hidden")
+            files, current_command, current_path = self.session.completion.get_files_for_completion(input_field.text)
             if files:
                 file_list.update_files(files, current_command, current_path)
-                command_list.add_class("hidden")
             else:
                 file_list.add_class("hidden")
 
@@ -136,7 +139,7 @@ class ChatScreen(Screen):
             command_list.add_class("hidden")
             file_list.add_class("hidden")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    def on_message_input_submitted(self, event: MessageInput.Submitted) -> None:
         """Обработка Enter: выбор в автодополнении или отправка сообщения.
 
         Args:
@@ -145,30 +148,21 @@ class ChatScreen(Screen):
         command_list = self.query_one("#command_list", CommandList)
         file_list = self.query_one("#file_list", FileList)
 
-        # Enter в открытом списке выбора обрабатывается в on_key
         if self.selector_manager.selector_active:
-            event.prevent_default()
             return
 
-        elif not command_list.has_class("hidden"):
-            command_list.apply_selection(event.input)
-            event.prevent_default()
+        input_field = self.query_one(MessageInput)
+        if not command_list.has_class("hidden") and command_list.get_selected_command() != input_field.text:
+            command_list.apply_selection(input_field)
             return
 
-        elif not file_list.has_class("hidden"):
-            file_list.apply_selection(event.input)
-            event.prevent_default()
+        if not file_list.has_class("hidden"):
+            file_list.apply_selection(input_field)
             return
 
-        if not self.session.start(self._run_message_processing):
-            event.prevent_default()
-            return
-
-        command_list.add_class("hidden")
-        file_list.add_class("hidden")
-        event.prevent_default()
-
-        self.query_one("#message_input").focus()
+        if self.session.start(self._run_message_processing):
+            command_list.add_class("hidden")
+            file_list.add_class("hidden")
 
     def on_key(self, event: events.Key) -> None:
         """Обработка клавиш: навигация в списках и отмена обработки сообщения.
@@ -201,7 +195,7 @@ class ChatScreen(Screen):
                 event.prevent_default()
 
         # Автодополнение команд
-        elif not command_list.has_class("hidden"):
+        elif isinstance(self.focused, MessageInput) and not command_list.has_class("hidden"):
             if event.key == "tab":
                 command_list.select_next()
                 event.prevent_default()
@@ -210,17 +204,13 @@ class ChatScreen(Screen):
                 command_list.select_previous()
                 event.prevent_default()
                 event.stop()
-            elif event.key == "enter":
-                command_list.apply_selection(self.query_one("#message_input"))
-                event.prevent_default()
-                self.query_one("#message_input").focus()
             elif event.key == "escape":
                 command_list.add_class("hidden")
                 event.prevent_default()
                 self.query_one("#message_input").focus()
 
         # Автодополнение файлов
-        elif not file_list.has_class("hidden"):
+        elif isinstance(self.focused, MessageInput) and not file_list.has_class("hidden"):
             if event.key == "tab":
                 file_list.select_next()
                 event.prevent_default()
@@ -258,43 +248,52 @@ class ChatScreen(Screen):
 
     async def process_message(self) -> None:
         """Обработка введенного сообщения: команды приложения, обработчики или запрос к GigaChat."""
-        input_field = self.query_one("#message_input", Input)
-        user_text = input_field.value.strip()
-
-        if not user_text:
+        input_field = self.query_one(MessageInput)
+        text = input_field.text
+        trimmed = text.strip()
+        if not trimmed:
             return
+
+        user_text = trimmed if trimmed.startswith(("/", "!")) else text
+        if user_text.startswith("!") and len(user_text.splitlines()) > 1:
+            self._begin_exchange()
+            self.update_chat_display("**Ошибка:** терминальная команда должна занимать одну строку.")
+            return
+        input_field.remember(user_text)
 
         if user_text.lower() == "/exit":
             self.app.exit("Результат работы")
             return
 
         if user_text.lower() == "/menu":
-            input_field.value = ""
+            input_field.text = ""
             self.app.push_screen("menu")
             return
 
-        if self.current_exchange:
-            self.completed_exchanges.append(self.current_exchange)
-        self.current_exchange = ""
-        self.query_one("#chat_welcome").add_class("hidden")
-        self.clear_chat_display()
-
+        self._begin_exchange()
         for handler in self.handlers:
             if await handler.handle(user_text, input_field, self):
                 return
 
         await self.handle_gigachat_message(user_text, input_field)
 
-    async def handle_gigachat_message(self, user_text: str, input_field: Input) -> None:
+    def _begin_exchange(self) -> None:
+        """Убрать приветствие и подготовить место для нового обмена."""
+        if self.current_exchange:
+            self.completed_exchanges.append(self.current_exchange)
+        self.query_one("#chat_welcome").add_class("hidden")
+        self.clear_chat_display()
+
+    async def handle_gigachat_message(self, user_text: str, input_field: MessageInput) -> None:
         """Отправка сообщения в GigaChat и вывод ответа.
 
         Args:
             user_text: Текст сообщения
             input_field: Поле ввода
         """
-        input_field.value = ""
+        input_field.text = ""
 
-        self.update_chat_display(f"**Вы:** {user_text}\n\n**GigaChat:**\n\n")
+        self.update_chat_display_stream(user_text, "")
 
         self.current_typing_indicator = TypingIndicator()
         chat_container = self.query_one("#chat_container")
@@ -369,7 +368,13 @@ class ChatScreen(Screen):
             user_text: Сообщение пользователя
             response_content: Полученная часть ответа
         """
-        full_content = f"**Вы:** {user_text}\n\n**GigaChat:**\n\n{response_content}"
+        if len(user_text.splitlines()) > 1 or "\n" in user_text:
+            longest_run = max((len(run) for run in re.findall(r"\x60+", user_text)), default=0)
+            fence = "\x60" * max(3, longest_run + 1)
+            user_text = f"\n\n{fence}\n{user_text}\n{fence}"
+        else:
+            user_text = f" {user_text}"
+        full_content = f"**Вы:**{user_text}\n\n**GigaChat:**\n\n{response_content}"
         self.update_chat_display(full_content)
 
     async def get_bot_response_stream(self, user_text: str) -> None:

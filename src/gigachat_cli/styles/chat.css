@@ -44,6 +44,17 @@
   height: 3;
 }
 
+#composer_hint {
+  padding: 0 1;
+  color: $text-muted;
+  height: auto;
+}
+
+#command_list, #file_list {
+  padding: 0 1;
+  background: $surface;
+}
+
 #message_input:focus {
   border: round $primary;
 }
