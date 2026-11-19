@@ -22,6 +22,7 @@ from gigachat_cli.handler.file_edit import FileEditHandler
 from gigachat_cli.handler.model import ModelHandler
 from gigachat_cli.handler.terminal_command import TerminalHandler
 from gigachat_cli.widgets.banner import Banner
+from gigachat_cli.widgets.file_review import FileReview
 
 from gigachat_cli.widgets.command_list import CommandList
 from gigachat_cli.widgets.file_list import FileList
@@ -61,6 +62,7 @@ class ChatScreen(Screen):
 
         # Состояние обработки текущего сообщения
         self._operation_status: str | None = None
+        self._file_review: FileReview | None = None
         self._active_exchange = Markdown(classes="chat_exchange")
         self.current_exchange: str = ""
         self._display_revision = 0
@@ -181,6 +183,12 @@ class ChatScreen(Screen):
         command_list = self.query_one("#command_list", CommandList)
         file_list = self.query_one("#file_list", FileList)
 
+        if self._file_review is not None and event.key in {"escape", "ctrl+c"}:
+            self._file_review.decide(False)
+            event.prevent_default()
+            event.stop()
+            return
+
         if event.key == "ctrl+c" and self.session.busy:
             self.session.cancel()
             event.prevent_default()
@@ -281,6 +289,26 @@ class ChatScreen(Screen):
                 return
 
         await self.handle_gigachat_message(user_text, input_field)
+
+    async def review_file(self, review: FileReview) -> bool:
+        """Показать подтверждение в диалоге и вернуть фокус после выбора."""
+        editor = self.query_one(MessageInput)
+        self._file_review = review
+        editor.disabled = True
+        self.set_operation_status("Ожидание подтверждения правки")
+        try:
+            await self.query_one("#chat_container", VerticalScroll).mount(review)
+            reject = review.query_one("#reject_change")
+            reject.focus()
+            reject.scroll_visible(animate=False)
+            return await review.wait_for_decision()
+        finally:
+            self._file_review = None
+            if review.is_mounted:
+                await review.remove()
+            if self.is_mounted:
+                editor.disabled = False
+                editor.focus()
 
     async def _begin_exchange(self) -> None:
         """Оставить прочитанные блоки на месте и открыть следующий обмен."""

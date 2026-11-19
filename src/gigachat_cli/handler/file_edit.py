@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from gigachat_cli.widgets.message_input import MessageInput
 
-from gigachat_cli.screens.file_review import FileReviewScreen
+from gigachat_cli.widgets.file_review import FileReview
 from gigachat_cli.core.command import split_command_arguments
 from gigachat_cli.core.file_edit import FileEdit, FileEditError
 
@@ -54,13 +54,11 @@ class FileEditHandler:
             return True
 
         path = edit.before.root / edit.before.relative_path
-        screen.app.push_screen(
-            FileReviewScreen(path, diff, undo=undo),
-            lambda approved: self._finish_review(screen, edit, undo, approved),
-        )
+        approved = await screen.review_file(FileReview(path, diff, undo=undo))
+        self._finish_review(screen, edit, undo, approved)
         return True
 
-    def _finish_review(self, screen: "ChatScreen", edit: FileEdit, undo: bool, approved: bool | None) -> None:
+    def _finish_review(self, screen: "ChatScreen", edit: FileEdit, undo: bool, approved: bool) -> None:
         """Применить подтверждённый вариант и сообщить результат в чате."""
         name = _escape_markdown(edit.before.relative_path.as_posix())
         if not approved:
