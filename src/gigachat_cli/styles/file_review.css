@@ -25,14 +25,16 @@ FileReview {
 
 #review_actions {
     height: auto;
-    align-horizontal: left;
+    margin-top: 1;
 }
 
 #review_actions Button {
     min-width: 0;
+    width: auto;
     height: 1;
-    margin: 0 2 0 0;
-    padding: 0;
+    content-align: left middle;
+    text-align: left;
+    padding: 0 1;
     border: none;
     background: $background;
     color: $foreground;

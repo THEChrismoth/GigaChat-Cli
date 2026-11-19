@@ -107,7 +107,9 @@ class ChatScreen(Screen):
 
     def _update_composer_hint(self) -> None:
         """Вывести подсказку для текущей операции или режима ввода."""
-        if self._operation_status:
+        if self._file_review is not None:
+            text = "1/2 выбрать · ↑/↓ выделить · Enter подтвердить · Esc отменить"
+        elif self._operation_status:
             text = f"{self._operation_status} · Esc / Ctrl+C отменить"
         elif not self.query_one(CommandList).has_class("hidden") or not self.query_one(FileList).has_class("hidden"):
             text = "Tab варианты · Enter выбрать · Esc закрыть"
@@ -183,8 +185,7 @@ class ChatScreen(Screen):
         command_list = self.query_one("#command_list", CommandList)
         file_list = self.query_one("#file_list", FileList)
 
-        if self._file_review is not None and event.key in {"escape", "ctrl+c"}:
-            self._file_review.decide(False)
+        if self._file_review is not None and self._file_review.handle_review_key(event.key):
             event.prevent_default()
             event.stop()
             return

@@ -441,6 +441,7 @@ async def test_file_edit_review_confirm_and_undo(tmp_path, monkeypatch, size):
         assert review.path == target
         assert "+[bold] replacement" in review.diff
         assert pilot.app.focused.id == "reject_change"
+        assert str(pilot.app.focused.label).startswith("› 1.")
         assert target.read_bytes() == b"original\n"
         assert "replacement" in pilot.app.export_screenshot()
         await pilot.press("enter")
@@ -451,7 +452,10 @@ async def test_file_edit_review_confirm_and_undo(tmp_path, monkeypatch, size):
         assert screen.query_one(MessageInput).display
 
         await send(pilot, command, wait=False)
-        await pilot.press("tab", "enter")
+        await pilot.press("down")
+        assert str(pilot.app.focused.label).startswith("› 2.")
+        assert target.read_bytes() == b"original\n"
+        await pilot.press("enter")
         assert pilot.app.screen is screen
         assert target.read_bytes() == b"[bold] replacement\n"
         assert "применено" in chat_text(screen)
@@ -462,7 +466,7 @@ async def test_file_edit_review_confirm_and_undo(tmp_path, monkeypatch, size):
         assert pilot.app.screen is screen
         assert target.read_bytes() == b"[bold] replacement\n"
         await send(pilot, "/undo", wait=False)
-        await pilot.press("tab", "enter")
+        await pilot.press("2")
         assert target.read_bytes() == b"original\n"
         assert "отменено" in chat_text(screen)
 
