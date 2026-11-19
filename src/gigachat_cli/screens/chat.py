@@ -295,6 +295,7 @@ class ChatScreen(Screen):
         editor = self.query_one(MessageInput)
         self._file_review = review
         editor.disabled = True
+        editor.add_class("hidden")
         self.set_operation_status("Ожидание подтверждения правки")
         try:
             await self.query_one("#chat_container", VerticalScroll).mount(review)
@@ -307,6 +308,7 @@ class ChatScreen(Screen):
             if review.is_mounted:
                 await review.remove()
             if self.is_mounted:
+                editor.remove_class("hidden")
                 editor.disabled = False
                 editor.focus()
 

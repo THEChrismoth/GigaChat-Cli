@@ -437,6 +437,7 @@ async def test_file_edit_review_confirm_and_undo(tmp_path, monkeypatch, size):
         review = screen.query_one(FileReview)
         assert review.parent.id == "chat_container"
         assert screen.query_one(MessageInput).disabled
+        assert not screen.query_one(MessageInput).display
         assert review.path == target
         assert "+[bold] replacement" in review.diff
         assert pilot.app.focused.id == "reject_change"
@@ -447,6 +448,7 @@ async def test_file_edit_review_confirm_and_undo(tmp_path, monkeypatch, size):
         assert target.read_bytes() == b"original\n"
         assert not screen.query(FileReview)
         assert pilot.app.focused is screen.query_one(MessageInput)
+        assert screen.query_one(MessageInput).display
 
         await send(pilot, command, wait=False)
         await pilot.press("tab", "enter")
@@ -498,6 +500,10 @@ async def test_long_inline_review_scrolls_and_keeps_chat_history(tmp_path, monke
         await send(pilot, "/edit new.txt Добавь текст", wait=False)
         review = screen.query_one(FileReview)
         diff = review.query_one("#diff_scroll")
+        for selector in ("#reject_change", "#apply_change"):
+            region = review.query_one(selector).content_region
+            background = screen.get_style_at(region.x, region.y).bgcolor
+            assert background is None or background.is_default
         assert "Доступные команды" in chat_text(screen)
         await pilot.press("shift+tab", "end")
         await pilot.pause(0.3)

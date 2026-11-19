@@ -28,8 +28,8 @@ class FileReview(Vertical):
         with VerticalScroll(id="diff_scroll"):
             yield Static(self.diff, markup=False, id="file_diff")
         with Horizontal(id="review_actions"):
-            yield Button("Отклонить", id="reject_change")
-            yield Button(self.apply_label, variant="primary", id="apply_change")
+            yield Button("Отклонить", id="reject_change", compact=True)
+            yield Button(self.apply_label, id="apply_change", compact=True)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Передать решение пользователя в чат."""

@@ -54,6 +54,7 @@ class FileEditHandler:
             return True
 
         path = edit.before.root / edit.before.relative_path
+        screen.update_chat_display("**Предлагаемый откат**" if undo else "**Предлагаемая правка**")
         approved = await screen.review_file(FileReview(path, diff, undo=undo))
         self._finish_review(screen, edit, undo, approved)
         return True
