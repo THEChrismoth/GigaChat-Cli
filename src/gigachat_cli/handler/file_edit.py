@@ -1,6 +1,7 @@
 """Команды чата для предложения и отката изменения файла."""
 
 import re
+from pathlib import PureWindowsPath
 from string import punctuation
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,34 @@ if TYPE_CHECKING:
 def _escape_markdown(text: str) -> str:
     """Показать пути и сообщения об ошибках как текст."""
     return re.sub(f"[{re.escape(punctuation)}]", lambda char: "\\" + char[0], text)
+
+
+def _has_file_suffix(value: str) -> bool:
+    """Узнать кандидата с расширением, исключая ссылки."""
+    return "://" not in value and bool(PureWindowsPath(value).suffix.strip("."))
+
+
+def _parse_edit_request(text: str) -> tuple[str, str]:
+    """Выбрать явный путь или единственное имя файла из задания."""
+    arguments = split_command_arguments(text)
+    hint = 'Укажите путь перед заданием: /edit "test.txt" Напиши «привет мир».'
+    if len(arguments) < 3 or not arguments[1].value:
+        raise FileEditError(hint)
+
+    first = arguments[1]
+    path = first.value
+    if first.quote or _has_file_suffix(path) or ("://" not in path and ("/" in path or "\\" in path)):
+        return path, text[arguments[2].start:]
+
+    candidates = set()
+    for argument in arguments[2:]:
+        # В естественной фразе имя может стоять в скобках или перед запятой.
+        value = argument.value if argument.quote else argument.value.strip("«»()\x60,;!?").rstrip(".")
+        if _has_file_suffix(value):
+            candidates.add(value)
+    if len(candidates) != 1:
+        raise FileEditError(hint)
+    return candidates.pop(), text[first.start:]
 
 
 class FileEditHandler:
@@ -36,14 +65,12 @@ class FileEditHandler:
                     raise FileEditError("Использование: /undo")
                 edit = screen.session.undo_edit()
             else:
-                arguments = split_command_arguments(user_text)
-                if len(arguments) < 3 or not arguments[1].value:
-                    raise FileEditError('Использование: /edit "путь к файлу" задание')
-                snapshot = screen.session.snapshot(arguments[1].value)
+                path, instruction = _parse_edit_request(user_text)
+                snapshot = screen.session.snapshot(path)
                 name = _escape_markdown(snapshot.relative_path.as_posix())
                 screen.update_chat_display(f"**Правка файла:** {name}")
                 screen.set_operation_status("Подготовка правки")
-                edit = await screen.session.propose_edit(snapshot, user_text[arguments[2].start:])
+                edit = await screen.session.propose_edit(snapshot, instruction)
 
             diff = edit.diff()
             if not diff:

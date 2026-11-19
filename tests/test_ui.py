@@ -488,6 +488,40 @@ async def test_file_creation_is_rechecked_at_confirmation(tmp_path, monkeypatch)
         assert "Файл изменился" in chat_text(screen)
 
 
+async def test_file_edit_uses_filename_from_natural_request(tmp_path, monkeypatch):
+    instruction = "сделай файл test.txt, со строкой привет мир"
+
+    async def propose(snapshot, request):
+        assert snapshot.relative_path.name == "test.txt"
+        assert request == instruction
+        return snapshot.propose("привет мир\n")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, "/edit " + instruction, wait=False)
+        assert screen.query_one(FileReview).path == tmp_path / "test.txt"
+        await pilot.press("tab", "enter")
+        assert (tmp_path / "test.txt").read_text(encoding="utf-8") == "привет мир\n"
+        assert not (tmp_path / "сделай").exists()
+
+
+@pytest.mark.parametrize("instruction", ["сделай новый файл", "обнови first.txt и second.txt"])
+async def test_file_edit_requires_explicit_path_when_request_is_ambiguous(tmp_path, monkeypatch, instruction):
+    async def propose(snapshot, request):
+        pytest.fail("Неоднозначный запрос отправлен модели")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, "/edit " + instruction)
+        assert "Укажите путь перед заданием" in chat_text(screen)
+        assert not screen.query(FileReview)
+        assert not list(tmp_path.iterdir())
+
+
 async def test_long_inline_review_scrolls_and_keeps_chat_history(tmp_path, monkeypatch):
     async def propose(snapshot, instruction):
         return snapshot.propose("\n".join(f"Строка {i}" for i in range(60)))
