@@ -41,7 +41,8 @@ class FileEditHandler:
                     raise FileEditError('Использование: /edit "путь к файлу" задание')
                 snapshot = screen.session.snapshot(arguments[1].value)
                 name = _escape_markdown(snapshot.relative_path.as_posix())
-                screen.update_chat_display(f"Подготовка правки для **{name}**. Esc — отменить.")
+                screen.update_chat_display(f"**Правка файла:** {name}")
+                screen.set_operation_status("Подготовка правки")
                 edit = await screen.session.propose_edit(snapshot, user_text[arguments[2].start:])
 
             diff = edit.diff()

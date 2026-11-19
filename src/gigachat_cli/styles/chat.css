@@ -29,15 +29,6 @@
   text-overflow: ellipsis;
 }
 
-.typing {
-    color: #888;
-    text-style: italic;
-    height: 1;
-    margin: 0;
-    padding: 0;
-    text-align: left;
-}
-
 #message_input {
   border: round $panel;
   background: $surface;

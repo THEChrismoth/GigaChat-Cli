@@ -3,7 +3,6 @@
 from gigachat_cli.widgets.message_input import MessageInput
 
 from gigachat_cli.core.command import CommandUtils
-from gigachat_cli.widgets.typing import TypingIndicator
 
 
 class TerminalHandler:
@@ -25,16 +24,8 @@ class TerminalHandler:
             input_field.text = ""
             screen.update_chat_display(f"**Вы:** `!{command}`")
 
-            screen.current_typing_indicator = TypingIndicator()
-            chat_container = screen.query_one("#chat_container")
-            chat_container.mount(screen.current_typing_indicator)
-
+            screen.set_operation_status("Выполнение команды")
             success, output, return_code = await screen.session.execute_command(command)
-
-            if screen.current_typing_indicator:
-                screen.current_typing_indicator.stop_animation()
-                screen.current_typing_indicator.remove()
-                screen.current_typing_indicator = None
 
             formatted_output = CommandUtils.format_command_output(output, success, return_code)
             screen.update_chat_display(f"**Вы:** `!{command}`\n\n**Система:**\n\n{formatted_output}")

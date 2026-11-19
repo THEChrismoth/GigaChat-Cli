@@ -4,7 +4,6 @@ import importlib.resources
 import asyncio
 import re
 from contextlib import aclosing
-from typing import Optional
 
 from textual.app import ComposeResult
 from textual.widgets import Markdown, Static, TextArea
@@ -26,7 +25,6 @@ from gigachat_cli.widgets.file_list import FileList
 from gigachat_cli.widgets.message_input import MessageInput
 from gigachat_cli.widgets.model import Model
 from gigachat_cli.widgets.dir import Dir
-from gigachat_cli.widgets.typing import TypingIndicator
 
 
 class ChatScreen(Screen):
@@ -56,7 +54,7 @@ class ChatScreen(Screen):
         ]
 
         # Состояние обработки текущего сообщения
-        self.current_typing_indicator: Optional[TypingIndicator] = None
+        self._operation_status: str | None = None
         self.current_response_content: str = ""
         self.completed_exchanges: list[str] = []
         self.current_exchange: str = ""
@@ -81,11 +79,10 @@ class ChatScreen(Screen):
         yield CommandList(id="command_list", classes="hidden")
         yield FileList(id="file_list", classes="hidden")
         yield MessageInput(id="message_input")
-        yield Static("Enter отправить/выбрать · F2 перенос · F3/F4 история", id="composer_hint")
+        yield Static("Enter отправить · F2 перенос · F3/F4 история", id="composer_hint")
 
     def on_mount(self) -> None:
         """Фокус на поле ввода и заполнение строки состояния."""
-        self.current_typing_indicator = None
         self.query_one("#message_input").focus()
         self._update_directory_display()
         self._update_model_display()
@@ -94,20 +91,22 @@ class ChatScreen(Screen):
 
     def on_unmount(self) -> None:
         """Отмена обработки сообщения при закрытии экрана."""
-        self._cleanup_stream_processing()
-
-    def _cleanup_stream_processing(self):
-        """Отмена текущей обработки сообщения и сброс ее состояния."""
         self.session.cancel()
-        self.current_response_content = ""
-        self._hide_typing_indicator()
 
-    def _hide_typing_indicator(self):
-        """Удаление индикатора ожидания ответа, если он показан."""
-        if self.current_typing_indicator:
-            self.current_typing_indicator.stop_animation()
-            self.current_typing_indicator.remove()
-            self.current_typing_indicator = None
+    def set_operation_status(self, status: str | None) -> None:
+        """Показать ход операции у поля ввода или вернуть подсказку клавиш."""
+        self._operation_status = status
+        self._update_composer_hint()
+
+    def _update_composer_hint(self) -> None:
+        """Вывести подсказку для текущей операции или режима ввода."""
+        if self._operation_status:
+            text = f"{self._operation_status} · Esc / Ctrl+C отменить"
+        elif not self.query_one(CommandList).has_class("hidden") or not self.query_one(FileList).has_class("hidden"):
+            text = "Tab варианты · Enter выбрать · Esc закрыть"
+        else:
+            text = "Enter отправить · F2 перенос · F3/F4 история"
+        self.query_one("#composer_hint", Static).update(text)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Показ автодополнения команд (/...) или файлов (!команда ...).
@@ -138,6 +137,7 @@ class ChatScreen(Screen):
         else:
             command_list.add_class("hidden")
             file_list.add_class("hidden")
+        self._update_composer_hint()
 
     def on_message_input_submitted(self, event: MessageInput.Submitted) -> None:
         """Обработка Enter: выбор в автодополнении или отправка сообщения.
@@ -154,15 +154,18 @@ class ChatScreen(Screen):
         input_field = self.query_one(MessageInput)
         if not command_list.has_class("hidden") and command_list.get_selected_command() != input_field.text:
             command_list.apply_selection(input_field)
+            self._update_composer_hint()
             return
 
         if not file_list.has_class("hidden"):
             file_list.apply_selection(input_field)
+            self._update_composer_hint()
             return
 
         if self.session.start(self._run_message_processing):
             command_list.add_class("hidden")
             file_list.add_class("hidden")
+            self._update_composer_hint()
 
     def on_key(self, event: events.Key) -> None:
         """Обработка клавиш: навигация в списках и отмена обработки сообщения.
@@ -206,6 +209,7 @@ class ChatScreen(Screen):
                 event.stop()
             elif event.key == "escape":
                 command_list.add_class("hidden")
+                self._update_composer_hint()
                 event.prevent_default()
                 self.query_one("#message_input").focus()
 
@@ -221,6 +225,7 @@ class ChatScreen(Screen):
                 event.stop()
             elif event.key == "escape":
                 file_list.add_class("hidden")
+                self._update_composer_hint()
                 event.prevent_default()
                 self.query_one("#message_input").focus()
 
@@ -243,8 +248,9 @@ class ChatScreen(Screen):
             if self.is_mounted:
                 self.update_chat_display(f"{self.current_exchange}\n\n**Ошибка:** {error}")
         finally:
-            self._hide_typing_indicator()
             self.current_response_content = ""
+            if self.is_mounted:
+                self.set_operation_status(None)
 
     async def process_message(self) -> None:
         """Обработка введенного сообщения: команды приложения, обработчики или запрос к GigaChat."""
@@ -295,9 +301,7 @@ class ChatScreen(Screen):
 
         self.update_chat_display_stream(user_text, "")
 
-        self.current_typing_indicator = TypingIndicator()
-        chat_container = self.query_one("#chat_container")
-        chat_container.mount(self.current_typing_indicator)
+        self.set_operation_status("Ожидание ответа")
         input_field.focus()
 
         await self.get_bot_response_stream(user_text)
@@ -391,10 +395,9 @@ class ChatScreen(Screen):
         try:
             async with aclosing(self.session.answer(user_text)) as stream:
                 async for chunk in stream:
-                    # С первой частью ответа индикатор ожидания больше не нужен
                     if chunk.content and not has_content:
                         has_content = True
-                        self._hide_typing_indicator()
+                        self.set_operation_status("Генерация ответа")
 
                     if chunk.content:
                         self.current_response_content += chunk.content
@@ -412,9 +415,6 @@ class ChatScreen(Screen):
 
         except Exception as e:
             self._show_stream_error(user_text, str(e))
-        finally:
-            self._hide_typing_indicator()
-            self.current_response_content = ""
 
     def _show_stream_error(self, user_text: str, error: str) -> None:
         """Вывод ошибки после уже полученной части ответа.
@@ -423,7 +423,6 @@ class ChatScreen(Screen):
             user_text: Сообщение пользователя
             error: Текст ошибки
         """
-        self._hide_typing_indicator()
         content = self.current_response_content
         if content:
             content += "\n\n"

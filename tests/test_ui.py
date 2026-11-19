@@ -86,7 +86,7 @@ async def test_streamed_answer_is_displayed(answers):
         assert fake.calls == [("Здравствуй", str(screen.session.directory))]
         assert screen.query_one("#message_input", MessageInput).text == ""
         assert not screen.session.busy
-        assert screen.current_typing_indicator is None
+        assert "F3/F4 история" in str(screen.query_one("#composer_hint").render())
 
 
 async def test_api_error_is_displayed(answers):
@@ -96,6 +96,30 @@ async def test_api_error_is_displayed(answers):
         await send(pilot, "Вопрос")
 
         assert "**Ошибка:** GIGACHAT_API_KEY не установен" in chat_text(pilot.app.screen)
+
+
+async def test_status_follows_response_and_resets_after_cancellation(monkeypatch):
+    first_chunk = asyncio.Event()
+
+    async def answer(prompt, project_path):
+        await first_chunk.wait()
+        yield StreamChunk("Часть ответа")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(session, "get_answer_stream", answer)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        hint = screen.query_one("#composer_hint")
+        screen.query_one(MessageInput).text = "Долгий запрос"
+        await pilot.press("enter")
+        assert "Ожидание ответа" in str(hint.render())
+        first_chunk.set()
+        await pilot.pause()
+        assert "Генерация ответа" in str(hint.render())
+        await pilot.press("escape")
+        await pilot.pause()
+        assert "F3/F4 история" in str(hint.render())
+        assert "Часть ответа" in chat_text(screen)
 
 
 @pytest.mark.parametrize("size", [(80, 24), (120, 40), (60, 24)])
