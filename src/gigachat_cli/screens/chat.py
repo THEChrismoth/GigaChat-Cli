@@ -6,7 +6,7 @@ from contextlib import aclosing
 from typing import Optional
 
 from textual.app import ComposeResult
-from textual.widgets import Input, Markdown
+from textual.widgets import Input, Markdown, Static
 from textual.screen import Screen
 from textual.containers import VerticalScroll, Horizontal
 from textual import events
@@ -23,8 +23,6 @@ from gigachat_cli.handler.terminal_command import TerminalHandler
 from gigachat_cli.widgets.command_list import CommandList
 from gigachat_cli.widgets.file_list import FileList
 from gigachat_cli.widgets.model import Model
-from gigachat_cli.widgets.banner import Banner
-from gigachat_cli.widgets.recommend import Recommend
 from gigachat_cli.widgets.dir import Dir
 from gigachat_cli.widgets.typing import TypingIndicator
 
@@ -67,11 +65,16 @@ class ChatScreen(Screen):
         """Создание виджетов экрана.
 
         Yields:
-            Баннер, советы, область чата, списки автодополнения, поле ввода и строку состояния
+            Рабочая папка, модель, история, подсказки и поле ввода.
         """
-        yield Banner(classes="banner")
-        yield Recommend(classes="recommend")
+        with Horizontal(classes="status_bar"):
+            yield Dir(classes="dir")
+            yield Model(classes="model")
         with VerticalScroll(id="chat_container"):
+            yield Static(
+                "[bold]GigaChat[/bold]\nЗадайте вопрос о проекте или введите /help.",
+                id="chat_welcome",
+            )
             yield Markdown("", id="chat_display")
         yield CommandList(id="command_list", classes="hidden")
         yield FileList(id="file_list", classes="hidden")
@@ -79,9 +82,6 @@ class ChatScreen(Screen):
             placeholder="Введите сообщение... (Нажмите Enter для отправки)",
             id="message_input"
         )
-        with Horizontal(classes="status_bar"):
-            yield Dir(classes="dir")
-            yield Model(classes="model")
 
     def on_mount(self) -> None:
         """Фокус на поле ввода и заполнение строки состояния."""
@@ -264,19 +264,19 @@ class ChatScreen(Screen):
         if not user_text:
             return
 
-        if user_text.lower().startswith('/exit'):
+        if user_text.lower() == "/exit":
             self.app.exit("Результат работы")
             return
 
-        if user_text.lower().startswith('/menu'):
-            self.app.pop_screen()
+        if user_text.lower() == "/menu":
+            input_field.value = ""
+            self.app.push_screen("menu")
             return
 
         if self.current_exchange:
             self.completed_exchanges.append(self.current_exchange)
         self.current_exchange = ""
-        self.query_one(Banner).add_class("hidden")
-        self.query_one(Recommend).add_class("hidden")
+        self.query_one("#chat_welcome").add_class("hidden")
         self.clear_chat_display()
 
         for handler in self.handlers:
@@ -325,7 +325,7 @@ class ChatScreen(Screen):
 
         chat_container = self.query_one("#chat_container")
         for child in chat_container.children:
-            if child.id != "chat_display":
+            if child.id not in {"chat_display", "chat_welcome"}:
                 child.remove()
 
     def update_chat_display(self, content: str = "") -> None:

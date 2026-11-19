@@ -105,7 +105,7 @@ async def test_stream_respects_scroll_position_and_focus(answers, size):
         await send(pilot, "Длинный ответ")
         screen = pilot.app.screen
         container = screen.query_one("#chat_container")
-        assert screen.query_one(".banner").has_class("hidden")
+        assert screen.query_one("#chat_welcome").has_class("hidden")
         assert container.size.height >= 15
         assert container.is_vertical_scroll_end
         container.scroll_home(animate=False)
@@ -526,11 +526,16 @@ def test_shorten_home(monkeypatch, tmp_path, path, expected):
     assert shorten_home(path.format(**values)) == expected.format(**values)
 
 
-async def test_main_app_starts_with_menu():
+async def test_main_app_starts_in_chat_and_menu_preserves_history(answers):
+    answers([StreamChunk("Ответ", is_final=True)])
     async with Main().run_test() as pilot:
+        chat_screen = pilot.app.screen
+        assert isinstance(chat_screen, ChatScreen)
+        assert pilot.app.focused.id == "message_input"
+        await send(pilot, "Первый вопрос")
+        await send(pilot, "/menu")
         assert isinstance(pilot.app.screen, MenuApp)
-
         await pilot.press("enter")
         await pilot.pause()
-
-        assert isinstance(pilot.app.screen, ChatScreen)
+        assert pilot.app.screen is chat_screen
+        assert "Первый вопрос" in chat_text(chat_screen)

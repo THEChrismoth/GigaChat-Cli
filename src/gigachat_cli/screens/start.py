@@ -7,7 +7,6 @@ from textual.screen import Screen
 from textual.widgets import ListView, ListItem, Label
 from textual.containers import Container
 
-from gigachat_cli.screens.chat import ChatScreen
 from gigachat_cli.screens.help import HelpScreen
 from gigachat_cli.widgets.banner import Banner
 
@@ -27,7 +26,7 @@ class MenuApp(Screen):
             Banner(),
             Container(
                 ListView(
-                    ListItem(Label("🚀 Начать использование", classes="menu-item"), id="start", classes="menu-button"),
+                    ListItem(Label("Вернуться в чат", classes="menu-item"), id="start", classes="menu-button"),
                     ListItem(Label("❓ Помощь и инструкции", classes="menu-item"), id="help", classes="menu-button"),
                     ListItem(Label("🚪 Выход", classes="menu-item"), id="exit", classes="menu-button"),
                     classes="menu-list"
@@ -45,7 +44,7 @@ class MenuApp(Screen):
         """
         choice = event.item.id
         if choice == "start":
-            self.app.push_screen(ChatScreen())
+            self.app.pop_screen()
         elif choice == "help":
             self.app.push_screen(HelpScreen())
         elif choice == "exit":
