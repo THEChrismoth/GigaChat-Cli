@@ -25,7 +25,7 @@ src/gigachat_cli/
   __main__.py       выбор TUI или CLI
   main.py           приложение Textual
   cli.py            аргументы, stdin, форматы вывода и коды завершения
-  screens/          меню, чат и справка
+  screens/          чат и предпросмотр файловых правок
   widgets/          вводимые списки, баннер и строка состояния
   styles/           CSS экранов Textual
   handler/          обработчики команд чата

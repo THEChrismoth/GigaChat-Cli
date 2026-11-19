@@ -1,6 +1,6 @@
 FileReviewScreen {
     align: center middle;
-    background: $background 65%;
+    background: transparent;
 }
 
 #file_review {
@@ -8,7 +8,7 @@ FileReviewScreen {
     height: 90%;
     padding: 0 1;
     border: round $primary;
-    background: $surface;
+    background: $background;
 }
 
 #review_path {
@@ -19,7 +19,7 @@ FileReviewScreen {
 
 #diff_scroll {
     height: 1fr;
-    border: solid $panel;
+    border: solid $border-blurred;
 }
 
 #diff_scroll:focus {

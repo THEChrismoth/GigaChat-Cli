@@ -12,7 +12,6 @@ from gigachat_cli.main import Main
 from gigachat_cli.core import session
 from gigachat_cli.screens.chat import ChatScreen
 from gigachat_cli.screens.file_review import FileReviewScreen
-from gigachat_cli.screens.start import MenuApp
 from gigachat_cli.core.config import DEFAULT_MODEL, Config
 from gigachat_cli.core.model import StreamChunk
 from gigachat_cli.core.command import split_command_arguments
@@ -601,16 +600,24 @@ async def test_multiline_terminal_command_is_not_executed(answers, monkeypatch):
         assert "терминальная команда должна занимать одну строку" in chat_text(screen)
 
 
-async def test_main_app_starts_in_chat_and_menu_preserves_history(answers):
-    answers([StreamChunk("Ответ", is_final=True)])
+@pytest.mark.parametrize("no_color", [False, True])
+async def test_main_uses_terminal_palette_and_help_stays_in_chat(monkeypatch, no_color):
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "1")
+    else:
+        monkeypatch.delenv("NO_COLOR", raising=False)
     async with Main().run_test() as pilot:
         chat_screen = pilot.app.screen
         assert isinstance(chat_screen, ChatScreen)
         assert pilot.app.focused.id == "message_input"
-        await send(pilot, "Первый вопрос")
-        await send(pilot, "/menu")
-        assert isinstance(pilot.app.screen, MenuApp)
-        await pilot.press("enter")
-        await pilot.pause()
+        assert pilot.app.ansi_color
+        history = chat_screen.query_one("#chat_container").region
+        style = chat_screen.get_style_at(history.x + 3, history.bottom - 2)
+        assert style.bgcolor is None or style.bgcolor.is_default
+        editor = pilot.app.focused.content_region
+        style = chat_screen.get_style_at(editor.x + 2, editor.y)
+        assert style.bgcolor is None or style.bgcolor.is_default
+        await send(pilot, "/help")
         assert pilot.app.screen is chat_screen
-        assert "Первый вопрос" in chat_text(chat_screen)
+        assert "Доступные команды" in chat_text(chat_screen)
+        assert not chat_screen.list_utils.get_filtered_commands("/menu")

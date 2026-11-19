@@ -3,13 +3,15 @@
 from textual.app import App
 
 from gigachat_cli.screens.chat import ChatScreen
-from gigachat_cli.screens.start import MenuApp
 
 
 class Main(App):
     """Приложение GigaChat CLI."""
 
-    SCREENS = {"menu": MenuApp}
+    def __init__(self) -> None:
+        """Инициализировать вывод с палитрой терминала."""
+        super().__init__(ansi_color=True)
+        self.theme = "textual-ansi"
 
     def on_mount(self) -> None:
         """Открыть чат и сразу дать фокус полю ввода."""

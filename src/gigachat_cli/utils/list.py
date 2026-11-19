@@ -12,7 +12,6 @@ class ListUtils:
             "exit": "Выйти из приложения",
             "model": "Выбор модели GigaChat",
             "help": "Показать справку по командам",
-            "menu":  "Возврат в меню"
         }
 
     def get_filtered_commands(self, text: str) -> list[str]:

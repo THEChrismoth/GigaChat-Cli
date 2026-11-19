@@ -1,6 +1,7 @@
 #chat_welcome {
   padding: 1 2;
-  color: $text-muted;
+  color: $foreground;
+  text-style: dim;
 }
 
 .status_bar {
@@ -8,19 +9,27 @@
   width: 100%;
   layout: horizontal;
   padding: 0 1;
-  background: $surface;
+  background: $background;
 }
 
-.dir{
-  color: $text-muted;
+#chat_title {
+  width: auto;
+  margin-right: 2;
+  color: $secondary;
+  text-style: bold;
+}
+
+.dir {
+  color: $foreground;
+  text-style: dim;
   width: 1fr;
   text-align: left;
   text-wrap: nowrap;
   text-overflow: ellipsis;
 }
 
-.model{
-  color: $text;
+.model {
+  color: $foreground;
   width: auto;
   max-width: 45%;
   margin-left: 1;
@@ -30,24 +39,27 @@
 }
 
 #message_input {
-  border: round $panel;
-  background: $surface;
+  border: none;
+  border-left: tall $border-blurred;
+  background: $background;
+  padding: 1 1;
   height: 3;
 }
 
 #composer_hint {
   padding: 0 1;
-  color: $text-muted;
+  color: $foreground;
+  text-style: dim;
   height: auto;
 }
 
 #command_list, #file_list {
   padding: 0 1;
-  background: $surface;
+  background: $background;
 }
 
 #message_input:focus {
-  border: round $primary;
+  border-left: tall $border;
 }
 
 .hidden {
@@ -55,7 +67,7 @@
 }
 
 #message_input:disabled {
-    background: $surface;
-    color: $text-muted;
-    border: round $panel;
+    background: $background;
+    color: $foreground;
+    border-left: tall $border-blurred;
 }

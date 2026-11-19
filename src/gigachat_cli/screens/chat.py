@@ -30,7 +30,7 @@ from gigachat_cli.widgets.dir import Dir
 class ChatScreen(Screen):
     """Экран чата с GigaChat.
 
-    Сообщение обрабатывается одной задачей сессии: команды /exit и /menu,
+    Сообщение обрабатывается одной задачей сессии: команда /exit,
     обработчики команд (/help, /model, !команда) или запрос к GigaChat.
     Пока задача выполняется, повторная отправка игнорируется, а Esc/Ctrl+C отменяет ее.
     """
@@ -68,18 +68,19 @@ class ChatScreen(Screen):
             Рабочая папка, модель, история, подсказки и поле ввода.
         """
         with Horizontal(classes="status_bar"):
+            yield Static("GigaChat", id="chat_title")
             yield Dir(classes="dir")
             yield Model(classes="model")
         with VerticalScroll(id="chat_container"):
             yield Static(
-                "[bold]GigaChat[/bold]\nЗадайте вопрос о проекте или введите /help.",
+                "Спросите о проекте, предложите правку через /edit или откройте /help.",
                 id="chat_welcome",
             )
             yield Markdown("", id="chat_display")
         yield CommandList(id="command_list", classes="hidden")
         yield FileList(id="file_list", classes="hidden")
         yield MessageInput(id="message_input")
-        yield Static("Enter отправить · F2 перенос · F3/F4 история", id="composer_hint")
+        yield Static("Enter отправить · F2 перенос · F3/F4 история · / команды", id="composer_hint")
 
     def on_mount(self) -> None:
         """Фокус на поле ввода и заполнение строки состояния."""
@@ -105,7 +106,7 @@ class ChatScreen(Screen):
         elif not self.query_one(CommandList).has_class("hidden") or not self.query_one(FileList).has_class("hidden"):
             text = "Tab варианты · Enter выбрать · Esc закрыть"
         else:
-            text = "Enter отправить · F2 перенос · F3/F4 история"
+            text = "Enter отправить · F2 перенос · F3/F4 история · / команды"
         self.query_one("#composer_hint", Static).update(text)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -269,11 +270,6 @@ class ChatScreen(Screen):
 
         if user_text.lower() == "/exit":
             self.app.exit("Результат работы")
-            return
-
-        if user_text.lower() == "/menu":
-            input_field.text = ""
-            self.app.push_screen("menu")
             return
 
         self._begin_exchange()
