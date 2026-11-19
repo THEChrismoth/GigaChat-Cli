@@ -11,7 +11,7 @@ from textual.screen import Screen
 from textual.containers import VerticalScroll, Horizontal
 from textual import events
 
-from gigachat_cli.utils.session import ChatSession
+from gigachat_cli.core.session import ChatSession
 from gigachat_cli.utils.list import ListUtils
 from gigachat_cli.utils.selector import SelectorManager
 

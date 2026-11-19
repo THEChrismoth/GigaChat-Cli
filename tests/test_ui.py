@@ -6,15 +6,15 @@ from textual.widgets import Input, Markdown
 
 from conftest import python_command
 from gigachat_cli.main import Main
-from gigachat_cli.utils import session
+from gigachat_cli.core import session
 from gigachat_cli.screens.chat import ChatScreen
 from gigachat_cli.screens.file_review import FileReviewScreen
 from gigachat_cli.screens.start import MenuApp
-from gigachat_cli.utils.config import DEFAULT_MODEL, Config
-from gigachat_cli.utils.core import StreamChunk
-from gigachat_cli.utils.command import split_command_arguments
+from gigachat_cli.core.config import DEFAULT_MODEL, Config
+from gigachat_cli.core.model import StreamChunk
+from gigachat_cli.core.command import split_command_arguments
 from gigachat_cli.widgets.file_list import FileList
-from gigachat_cli.utils.core import chat_manager
+from gigachat_cli.core.model import chat_manager
 
 
 class ChatApp(App):

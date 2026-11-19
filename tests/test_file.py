@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from gigachat_cli.utils.command import CommandUtils
-from gigachat_cli.utils.file import FileUtils, split_path_argument
+from gigachat_cli.core.command import CommandUtils
+from gigachat_cli.core.file import FileUtils, split_path_argument
 from gigachat_cli.widgets.file_list import FileList
 
 

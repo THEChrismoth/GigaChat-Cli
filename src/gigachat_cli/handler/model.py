@@ -2,7 +2,7 @@
 
 from textual.widgets import Input
 
-from gigachat_cli.utils.session import ChatSession
+from gigachat_cli.core.session import ChatSession
 
 
 class ModelHandler:

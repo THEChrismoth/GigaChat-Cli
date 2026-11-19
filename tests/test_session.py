@@ -2,7 +2,7 @@ import asyncio
 from contextlib import aclosing
 from types import SimpleNamespace
 
-from gigachat_cli.utils import session
+from gigachat_cli.core import session
 
 
 async def test_session_uses_changed_directory_for_answers_and_edits(tmp_path, monkeypatch):
@@ -59,7 +59,7 @@ async def test_session_stays_busy_until_cancelled_operation_finishes():
 async def test_history_is_committed_when_frontend_receives_final_chunk(manager, monkeypatch):
     fake = SimpleNamespace(stream=lambda messages: iter([SimpleNamespace(content="Ответ")]))
     monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: fake)
-    monkeypatch.setattr("gigachat_cli.utils.core.chat_manager", manager)
+    monkeypatch.setattr("gigachat_cli.core.model.chat_manager", manager)
 
     async with aclosing(session.ChatSession().answer("Вопрос")) as stream:
         assert (await anext(stream)).content == "Ответ"

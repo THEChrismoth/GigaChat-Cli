@@ -6,7 +6,7 @@ from textual.widgets import Input, Static
 from textual.reactive import reactive
 from pathlib import Path
 
-from gigachat_cli.utils.file import complete_path_argument
+from gigachat_cli.core.file import complete_path_argument
 
 
 class FileList(Static):

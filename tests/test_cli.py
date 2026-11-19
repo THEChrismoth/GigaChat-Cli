@@ -5,8 +5,8 @@ import pytest
 
 from gigachat_cli import __main__ as entry
 from gigachat_cli import cli
-from gigachat_cli.utils import session
-from gigachat_cli.utils.core import StreamChunk, chat_manager
+from gigachat_cli.core import session
+from gigachat_cli.core.model import StreamChunk, chat_manager
 
 
 class FakeStdin(io.StringIO):

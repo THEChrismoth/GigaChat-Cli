@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from gigachat_cli.utils import core
-from gigachat_cli.utils.file_edit import FileEditError, read_snapshot
+from gigachat_cli.core import model as core
+from gigachat_cli.core.file_edit import FileEditError, read_snapshot
 
 
 class FakeGiga:
@@ -41,7 +41,7 @@ async def collect(stream):
     ("text", "expected"),
     [
         ("объясни main.py", ["main.py"]),
-        ("сравни src/utils/core.py и README.md", ["src/utils/core.py", "README.md"]),
+        ("сравни src/gigachat_cli/core/session.py и README.md", ["src/gigachat_cli/core/session.py", "README.md"]),
         ("посмотри pkg\\main.py", ["pkg\\main.py"]),
         ("main.py и еще раз main.py", ["main.py"]),
         ("CONFIG.YAML", ["CONFIG.YAML"]),

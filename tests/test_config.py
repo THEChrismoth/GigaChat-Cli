@@ -1,6 +1,6 @@
 import json
 
-from gigachat_cli.utils.config import DEFAULT_MODEL
+from gigachat_cli.core.config import DEFAULT_MODEL
 
 
 def test_default_config_created(config):

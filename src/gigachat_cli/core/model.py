@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_gigachat.chat_models import GigaChat
 
-from gigachat_cli.utils.config import Config
-from gigachat_cli.utils.file_edit import FileEdit, FileEditError, FileSnapshot
+from gigachat_cli.core.config import Config
+from gigachat_cli.core.file_edit import FileEdit, FileEditError, FileSnapshot
 
 
 # Значения переменной окружения, отключающие проверку SSL

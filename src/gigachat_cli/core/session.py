@@ -5,10 +5,10 @@ from contextlib import aclosing
 from pathlib import Path
 from typing import AsyncGenerator, Callable, Coroutine
 
-from gigachat_cli.utils.command import CommandUtils
-from gigachat_cli.utils.core import StreamChunk, chat_manager, get_answer_stream
-from gigachat_cli.utils.file import FileUtils
-from gigachat_cli.utils.file_edit import FileEdit, FileEditError, FileSnapshot, read_snapshot
+from gigachat_cli.core.command import CommandUtils
+from gigachat_cli.core.model import StreamChunk, chat_manager, get_answer_stream
+from gigachat_cli.core.file import FileUtils
+from gigachat_cli.core.file_edit import FileEdit, FileEditError, FileSnapshot, read_snapshot
 
 
 class ChatSession:

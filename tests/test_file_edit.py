@@ -3,7 +3,7 @@ import stat
 
 import pytest
 
-from gigachat_cli.utils.file_edit import FileEditError, MAX_EDIT_BYTES, read_snapshot
+from gigachat_cli.core.file_edit import FileEditError, MAX_EDIT_BYTES, read_snapshot
 
 
 def test_edit_preview_apply_and_undo_preserve_bytes(tmp_path):

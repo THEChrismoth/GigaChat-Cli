@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from conftest import python_command
-from gigachat_cli.utils.command import CommandUtils
+from gigachat_cli.core.command import CommandUtils
 
 
 @pytest.fixture

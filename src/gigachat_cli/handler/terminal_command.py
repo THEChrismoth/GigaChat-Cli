@@ -2,7 +2,7 @@
 
 from textual.widgets import Input
 
-from gigachat_cli.utils.command import CommandUtils
+from gigachat_cli.core.command import CommandUtils
 from gigachat_cli.widgets.typing import TypingIndicator
 
 

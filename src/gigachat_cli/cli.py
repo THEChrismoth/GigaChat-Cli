@@ -9,8 +9,8 @@ import time
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Dict, List, Optional, TextIO
 
-from gigachat_cli.utils.core import chat_manager
-from gigachat_cli.utils.session import ChatSession
+from gigachat_cli.core.model import chat_manager
+from gigachat_cli.core.session import ChatSession
 
 
 OUTPUT_FORMATS = ("text", "json", "stream-json")

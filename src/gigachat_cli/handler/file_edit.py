@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 from textual.widgets import Input
 
 from gigachat_cli.screens.file_review import FileReviewScreen
-from gigachat_cli.utils.command import split_command_arguments
-from gigachat_cli.utils.file_edit import FileEdit, FileEditError
+from gigachat_cli.core.command import split_command_arguments
+from gigachat_cli.core.file_edit import FileEdit, FileEditError
 
 if TYPE_CHECKING:
     from gigachat_cli.screens.chat import ChatScreen

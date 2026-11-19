@@ -2,8 +2,8 @@ import shlex
 
 import pytest
 
-from gigachat_cli.utils.command import quote_command_argument, split_command_arguments
-from gigachat_cli.utils.file import complete_path_argument
+from gigachat_cli.core.command import quote_command_argument, split_command_arguments
+from gigachat_cli.core.file import complete_path_argument
 
 
 def values(text, posix):

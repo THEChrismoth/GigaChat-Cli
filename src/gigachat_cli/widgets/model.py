@@ -1,7 +1,7 @@
 """Строка состояния с текущей моделью GigaChat."""
 
 from textual.widgets import Static
-from gigachat_cli.utils.config import Config
+from gigachat_cli.core.config import Config
 
 
 class Model(Static):
