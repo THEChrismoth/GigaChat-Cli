@@ -4,6 +4,10 @@
   text-style: dim;
 }
 
+.chat_exchange {
+  margin-bottom: 1;
+}
+
 .status_bar {
   height: 1;
   width: 100%;

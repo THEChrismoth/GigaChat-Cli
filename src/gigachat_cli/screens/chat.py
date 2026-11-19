@@ -6,8 +6,10 @@ import re
 from contextlib import aclosing
 
 from textual.app import ComposeResult
+from textual.await_complete import AwaitComplete
 from textual.widgets import Markdown, Static, TextArea
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.containers import VerticalScroll, Horizontal
 from textual import events
 
@@ -25,6 +27,9 @@ from gigachat_cli.widgets.file_list import FileList
 from gigachat_cli.widgets.message_input import MessageInput
 from gigachat_cli.widgets.model import Model
 from gigachat_cli.widgets.dir import Dir
+
+
+_RESPONSE_FRAME_INTERVAL = 1 / 30
 
 
 class ChatScreen(Screen):
@@ -55,8 +60,7 @@ class ChatScreen(Screen):
 
         # Состояние обработки текущего сообщения
         self._operation_status: str | None = None
-        self.current_response_content: str = ""
-        self.completed_exchanges: list[str] = []
+        self._active_exchange = Markdown(classes="chat_exchange")
         self.current_exchange: str = ""
         self._display_revision = 0
         self._follow_scroll_y: float | None = None
@@ -76,7 +80,7 @@ class ChatScreen(Screen):
                 "Спросите о проекте, предложите правку через /edit или откройте /help.",
                 id="chat_welcome",
             )
-            yield Markdown("", id="chat_display")
+            yield self._active_exchange
         yield CommandList(id="command_list", classes="hidden")
         yield FileList(id="file_list", classes="hidden")
         yield MessageInput(id="message_input")
@@ -249,7 +253,6 @@ class ChatScreen(Screen):
             if self.is_mounted:
                 self.update_chat_display(f"{self.current_exchange}\n\n**Ошибка:** {error}")
         finally:
-            self.current_response_content = ""
             if self.is_mounted:
                 self.set_operation_status(None)
 
@@ -263,7 +266,7 @@ class ChatScreen(Screen):
 
         user_text = trimmed if trimmed.startswith(("/", "!")) else text
         if user_text.startswith("!") and len(user_text.splitlines()) > 1:
-            self._begin_exchange()
+            await self._begin_exchange()
             self.update_chat_display("**Ошибка:** терминальная команда должна занимать одну строку.")
             return
         input_field.remember(user_text)
@@ -272,19 +275,26 @@ class ChatScreen(Screen):
             self.app.exit("Результат работы")
             return
 
-        self._begin_exchange()
+        await self._begin_exchange()
         for handler in self.handlers:
             if await handler.handle(user_text, input_field, self):
                 return
 
         await self.handle_gigachat_message(user_text, input_field)
 
-    def _begin_exchange(self) -> None:
-        """Убрать приветствие и подготовить место для нового обмена."""
-        if self.current_exchange:
-            self.completed_exchanges.append(self.current_exchange)
+    async def _begin_exchange(self) -> None:
+        """Оставить прочитанные блоки на месте и открыть следующий обмен."""
         self.query_one("#chat_welcome").add_class("hidden")
-        self.clear_chat_display()
+        has_previous_exchange = bool(self.current_exchange)
+        self.current_exchange = ""
+        if has_previous_exchange:
+            chat_container = self.query_one("#chat_container", VerticalScroll)
+            scroll_y = chat_container.scroll_y
+            follow_response = chat_container.is_vertical_scroll_end or scroll_y == self._follow_scroll_y
+            self._active_exchange = Markdown(classes="chat_exchange")
+            await chat_container.mount(self._active_exchange)
+            if follow_response and chat_container.scroll_y == scroll_y:
+                self._follow_scroll_y = scroll_y
 
     async def handle_gigachat_message(self, user_text: str, input_field: MessageInput) -> None:
         """Отправка сообщения в GigaChat и вывод ответа.
@@ -294,8 +304,6 @@ class ChatScreen(Screen):
             input_field: Поле ввода
         """
         input_field.text = ""
-
-        self.update_chat_display_stream(user_text, "")
 
         self.set_operation_status("Ожидание ответа")
         input_field.focus()
@@ -316,22 +324,14 @@ class ChatScreen(Screen):
         dir_widget.current_dir = str(current_dir)
         dir_widget.refresh()
 
-    def clear_chat_display(self) -> None:
-        """Очистить текущий обмен и временные виджеты, сохранив завершённые обмены."""
-        chat_display = self.query_one("#chat_display", Markdown)
-        self.current_exchange = ""
-        chat_display.update("\n\n---\n\n".join(self.completed_exchanges))
-
-        chat_container = self.query_one("#chat_container")
-        for child in chat_container.children:
-            if child.id not in {"chat_display", "chat_welcome"}:
-                child.remove()
-
-    def update_chat_display(self, content: str = "") -> None:
+    def update_chat_display(self, content: str) -> AwaitComplete:
         """Обновить текущий обмен, следуя за ответом только при чтении конца чата.
 
         Args:
-            content: Текст в формате Markdown
+            content: Текст в формате Markdown.
+
+        Returns:
+            Операция, которую можно дождаться после обновления блока.
         """
         chat_container = self.query_one("#chat_container", VerticalScroll)
         follow_response = (
@@ -339,16 +339,16 @@ class ChatScreen(Screen):
             or chat_container.scroll_y == self._follow_scroll_y
         )
         self._follow_scroll_y = chat_container.scroll_y if follow_response else None
-        chat_display = self.query_one("#chat_display", Markdown)
         self.current_exchange = content
         self._display_revision += 1
-        update = chat_display.update("\n\n---\n\n".join([*self.completed_exchanges, content]))
+        update = self._active_exchange.update(content)
         if follow_response:
             self.call_later(
                 self._scroll_after_update, update, self._display_revision, chat_container.scroll_y
             )
+        return update
 
-    async def _scroll_after_update(self, update, revision: int, scroll_y: float) -> None:
+    async def _scroll_after_update(self, update: AwaitComplete, revision: int, scroll_y: float) -> None:
         """Дождаться Markdown и не сбрасывать прокрутку, изменённую во время рендера."""
         await update
         chat_container = self.query_one("#chat_container", VerticalScroll)
@@ -361,65 +361,60 @@ class ChatScreen(Screen):
         if revision == self._display_revision:
             self._follow_scroll_y = None
 
-    def update_chat_display_stream(self, user_text: str, response_content: str) -> None:
-        """Вывод сообщения пользователя и полученной части ответа.
-
-        Args:
-            user_text: Сообщение пользователя
-            response_content: Полученная часть ответа
-        """
-        if len(user_text.splitlines()) > 1 or "\n" in user_text:
-            longest_run = max((len(run) for run in re.findall(r"\x60+", user_text)), default=0)
-            fence = "\x60" * max(3, longest_run + 1)
-            user_text = f"\n\n{fence}\n{user_text}\n{fence}"
-        else:
-            user_text = f" {user_text}"
-        full_content = f"**Вы:**{user_text}\n\n**GigaChat:**\n\n{response_content}"
-        self.update_chat_display(full_content)
-
     async def get_bot_response_stream(self, user_text: str) -> None:
-        """Получение ответа GigaChat по частям с выводом в чат.
+        """Объединить фрагменты ответа и обновлять только активный блок диалога."""
+        if len(user_text.splitlines()) > 1 or "\n" in user_text:
+            longest_run = max((len(run) for run in re.findall(r"~+", user_text)), default=0)
+            fence = "~" * max(3, longest_run + 1)
+            prompt = f"\n\n{fence}\n{user_text}\n{fence}"
+        else:
+            prompt = f" {user_text}"
 
-        Файлы и анализ проекта берутся из текущей директории чата (меняется через !cd).
+        heading = f"**Вы:**{prompt}\n\n**GigaChat:**\n\n"
+        last_update = self.update_chat_display(heading)
+        pending: list[str] = []
+        response = ""
+        error: str | None = None
+        timer: Timer | None = None
+        finished = False
 
-        Args:
-            user_text: Сообщение пользователя
-        """
-        self.current_response_content = ""
+        def paint(*, final: bool = False) -> None:
+            """Обновить ответ порцией, когда закончена предыдущая отрисовка."""
+            nonlocal timer, last_update, response
+            if finished and not final:
+                return
+            if timer is not None:
+                timer.stop()
+                timer = None
+            if not self.is_mounted or not (pending or error):
+                return
+            if not final and not last_update.is_done:
+                timer = self.set_timer(_RESPONSE_FRAME_INTERVAL, paint)
+                return
+            response += "".join(pending)
+            pending.clear()
+            text = response
+            if error:
+                text = f"{text}\n\n**Ошибка:** {error}" if text else f"**Ошибка:** {error}"
+            last_update = self.update_chat_display(heading + text)
+
         has_content = False
-
         try:
             async with aclosing(self.session.answer(user_text)) as stream:
                 async for chunk in stream:
-                    if chunk.content and not has_content:
-                        has_content = True
-                        self.set_operation_status("Генерация ответа")
-
                     if chunk.content:
-                        self.current_response_content += chunk.content
-                        self.update_chat_display_stream(user_text, self.current_response_content)
-
-                    if chunk.error:
-                        self._show_stream_error(user_text, chunk.error)
+                        if not has_content:
+                            has_content = True
+                            self.set_operation_status("Генерация ответа")
+                        pending.append(chunk.content)
+                        if timer is None:
+                            timer = self.set_timer(_RESPONSE_FRAME_INTERVAL, paint)
+                    if chunk.error or chunk.is_final:
+                        error = chunk.error
                         break
-
-                    if chunk.is_final:
-                        break
-
-                    # Небольшая пауза для плавного отображения
-                    await asyncio.sleep(0.01)
-
-        except Exception as e:
-            self._show_stream_error(user_text, str(e))
-
-    def _show_stream_error(self, user_text: str, error: str) -> None:
-        """Вывод ошибки после уже полученной части ответа.
-
-        Args:
-            user_text: Сообщение пользователя
-            error: Текст ошибки
-        """
-        content = self.current_response_content
-        if content:
-            content += "\n\n"
-        self.update_chat_display_stream(user_text, f"{content}**Ошибка:** {error}")
+        except Exception as exc:
+            error = str(exc) or type(exc).__name__
+        finally:
+            # При отмене внешний обработчик добавляет пометку к уже показанному тексту.
+            finished = True
+            paint(final=True)

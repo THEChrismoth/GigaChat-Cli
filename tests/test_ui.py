@@ -59,7 +59,7 @@ def default_model():
 
 
 def chat_text(screen) -> str:
-    return screen.query_one("#chat_display", Markdown).source
+    return "\n\n".join(block.source for block in screen.query(".chat_exchange").results(Markdown))
 
 
 async def send(pilot, text: str) -> None:
@@ -163,6 +163,35 @@ async def test_history_survives_messages_help_and_model_selection(answers):
         assert text.count("**GigaChat:**") == 10
         assert "Доступные команды" in text
         assert "Выбор отменен" in text
+
+
+async def test_fast_stream_batches_fragments_without_rebuilding_history(answers, monkeypatch):
+    answers([StreamChunk("\n\n".join(f"Строка {i}" for i in range(30)), is_final=True)])
+    async with ChatApp().run_test(size=(80, 24)) as pilot:
+        screen = pilot.app.screen
+        await send(pilot, "Первый вопрос")
+        history = screen.query_one("#chat_container")
+        first = screen.query_one(".chat_exchange", Markdown)
+        finished_blocks = tuple(first.children)
+        assert history.is_vertical_scroll_end
+
+        updated = []
+        update = Markdown.update
+
+        def track(widget, source):
+            updated.append(widget)
+            return update(widget, source)
+
+        monkeypatch.setattr(Markdown, "update", track)
+        chunks = [StreamChunk(str(i) + " ") for i in range(180)]
+        answers(chunks + [StreamChunk("", is_final=True)])
+        await send(pilot, "Второй вопрос")
+
+        assert first not in updated
+        assert tuple(first.children) == finished_blocks
+        assert " ".join(str(i) for i in range(180)) in chat_text(screen)
+        assert 0 < len(updated) < len(chunks) // 2
+        assert history.is_vertical_scroll_end
 
 
 async def test_partial_answer_kept_on_error(answers):
