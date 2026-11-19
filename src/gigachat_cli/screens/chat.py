@@ -10,7 +10,7 @@ from textual.await_complete import AwaitComplete
 from textual.widgets import Markdown, Static, TextArea
 from textual.screen import Screen
 from textual.timer import Timer
-from textual.containers import VerticalScroll, Horizontal
+from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual import events
 
 from gigachat_cli.core.session import ChatSession
@@ -21,6 +21,7 @@ from gigachat_cli.handler.help import HelpHandler
 from gigachat_cli.handler.file_edit import FileEditHandler
 from gigachat_cli.handler.model import ModelHandler
 from gigachat_cli.handler.terminal_command import TerminalHandler
+from gigachat_cli.widgets.banner import Banner
 
 from gigachat_cli.widgets.command_list import CommandList
 from gigachat_cli.widgets.file_list import FileList
@@ -76,10 +77,9 @@ class ChatScreen(Screen):
             yield Dir(classes="dir")
             yield Model(classes="model")
         with VerticalScroll(id="chat_container"):
-            yield Static(
-                "Спросите о проекте, предложите правку через /edit или откройте /help.",
-                id="chat_welcome",
-            )
+            with Vertical(id="chat_welcome"):
+                yield Banner()
+                yield Static("Спросите о проекте, предложите правку через /edit или откройте /help.")
             yield self._active_exchange
         yield CommandList(id="command_list", classes="hidden")
         yield FileList(id="file_list", classes="hidden")

@@ -1,7 +1,15 @@
 #chat_welcome {
+  height: auto;
   padding: 1 2;
   color: $foreground;
   text-style: dim;
+}
+
+#chat_banner {
+  color: $secondary;
+  text-style: bold;
+  text-wrap: nowrap;
+  margin-bottom: 1;
 }
 
 .chat_exchange {

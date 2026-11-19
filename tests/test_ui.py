@@ -650,3 +650,21 @@ async def test_main_uses_terminal_palette_and_help_stays_in_chat(monkeypatch, no
         assert pilot.app.screen is chat_screen
         assert "Доступные команды" in chat_text(chat_screen)
         assert not chat_screen.list_utils.get_filtered_commands("/menu")
+
+
+async def test_welcome_logo_adapts_to_width_and_hides_after_submit(answers):
+    answers([StreamChunk("Ответ", is_final=True)])
+    async with Main().run_test(size=(120, 40)) as pilot:
+        screen = pilot.app.screen
+        banner = screen.query_one("#chat_banner")
+        assert "░" in str(banner.render())
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        compact = str(banner.render())
+        assert "█" in compact and "░" not in compact
+        await pilot.resize_terminal(40, 24)
+        await pilot.pause()
+        assert str(banner.render()) == "GigaChat"
+        await send(pilot, "Первый вопрос")
+        assert screen.query_one("#chat_welcome").has_class("hidden")
+        assert "Ответ" in chat_text(screen)
