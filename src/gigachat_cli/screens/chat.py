@@ -14,6 +14,7 @@ from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual import events
 
 from gigachat_cli.core.session import ChatSession
+from gigachat_cli.core.sessions import MAX_SAVED_EXCHANGES, SavedSession, SessionData, SessionStore, SessionStoreError
 from gigachat_cli.utils.list import ListUtils
 from gigachat_cli.utils.selector import SelectorManager
 
@@ -32,6 +33,14 @@ from gigachat_cli.widgets.dir import Dir
 
 
 _RESPONSE_FRAME_INTERVAL = 1 / 30
+_SESSION_COMMANDS = {"/new", "/sessions", "/resume"}
+_UNSAVED_COMMANDS = _SESSION_COMMANDS | {"/exit", "/help", "/model"}
+
+
+def _is_saved_prompt(text: str) -> bool:
+    """Исключить системные команды и внутреннюю навигацию из истории на диске."""
+    text = text.lstrip()
+    return bool(text) and not text.startswith("!") and text.split(maxsplit=1)[0].lower() not in _UNSAVED_COMMANDS
 
 
 class ChatScreen(Screen):
@@ -44,18 +53,24 @@ class ChatScreen(Screen):
 
     CSS = importlib.resources.files("gigachat_cli.styles").joinpath("chat.css").read_text()
 
-    def __init__(self):
+    def __init__(self, *, store: SessionStore | None = None):
         """Создание экрана, утилит и обработчиков команд."""
         super().__init__()
         self.session = ChatSession()
         self.list_utils = ListUtils()
+        self._store = store
+        self._saved_session: SavedSession | None = None
+        self._saved_exchanges: list[str] = []
+        self._save_current = False
+        self._chat_closing = False
+        self._file_edits = FileEditHandler()
 
         self.selector_manager = SelectorManager(self)
 
         # Обработчики проверяются по порядку, первый подходящий обрабатывает сообщение
         self.handlers =[
             HelpHandler(),
-            FileEditHandler(),
+            self._file_edits,
             ModelHandler(self.session, self),
             TerminalHandler()
         ]
@@ -88,16 +103,27 @@ class ChatScreen(Screen):
         yield MessageInput(id="message_input")
         yield Static("Enter отправить · F2 перенос · F3/F4 история · / команды", id="composer_hint")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         """Фокус на поле ввода и заполнение строки состояния."""
         self.query_one("#message_input").focus()
         self._update_directory_display()
         self._update_model_display()
         self.query_one("#command_list", CommandList).add_class("hidden")
         self.query_one("#file_list", FileList).add_class("hidden")
+        if self._store is not None:
+            try:
+                saved = await asyncio.to_thread(self._store.load)
+            except SessionStoreError as error:
+                self.notify(str(error), severity="warning")
+                return
+            if saved is not None:
+                await self._show_saved_session(saved)
+            else:
+                self.session.restore_model_history(())
 
     def on_unmount(self) -> None:
         """Отмена обработки сообщения при закрытии экрана."""
+        self._chat_closing = True
         self.session.cancel()
 
     def set_operation_status(self, status: str | None) -> None:
@@ -251,19 +277,22 @@ class ChatScreen(Screen):
 
     async def _run_message_processing(self) -> None:
         """Обработка сообщения с гарантированным сбросом состояния после завершения или отмены."""
+        self._save_current = False
         try:
             await self.process_message()
         except asyncio.CancelledError:
-            if self.is_mounted:
+            if self.is_mounted and not self._chat_closing:
                 self.update_chat_display(
                     f"{self.current_exchange}\n\n*Запрос отменен пользователем*"
                 )
         except Exception as error:
-            if self.is_mounted:
+            if self.is_mounted and not self._chat_closing:
                 self.update_chat_display(f"{self.current_exchange}\n\n**Ошибка:** {error}")
         finally:
-            if self.is_mounted:
+            if self.is_mounted and not self._chat_closing:
                 self.set_operation_status(None)
+                if self._save_current and self.current_exchange:
+                    await self._save_exchange()
 
     async def process_message(self) -> None:
         """Обработка введенного сообщения: команды приложения, обработчики или запрос к GigaChat."""
@@ -284,12 +313,93 @@ class ChatScreen(Screen):
             self.app.exit("Результат работы")
             return
 
+        command = user_text.split(maxsplit=1)[0].lower()
+        if command in _SESSION_COMMANDS:
+            input_field.text = ""
+            await self._handle_session_command(command, user_text[len(command):].strip())
+            return
+
         await self._begin_exchange()
+        self._save_current = _is_saved_prompt(user_text)
         for handler in self.handlers:
             if await handler.handle(user_text, input_field, self):
                 return
 
         await self.handle_gigachat_message(user_text, input_field)
+
+    async def _save_exchange(self) -> None:
+        """Записать законченный обмен без предложений, ожидающих подтверждения."""
+        if self._store is None:
+            return
+        self._saved_exchanges.append(self.current_exchange)
+        self._saved_exchanges = self._saved_exchanges[-MAX_SAVED_EXCHANGES:]
+        prompts = self.query_one(MessageInput).submitted_messages
+        data = SessionData(
+            tuple(self._saved_exchanges),
+            tuple(prompt for prompt in prompts if _is_saved_prompt(prompt)),
+            self.session.export_model_history(),
+        )
+        write = asyncio.create_task(asyncio.to_thread(self._store.save, data, self._saved_session))
+        try:
+            try:
+                self._saved_session = await asyncio.shield(write)
+            except asyncio.CancelledError:
+                self._saved_session = await write
+        except SessionStoreError as error:
+            if self.is_mounted and not self._chat_closing:
+                self.notify(str(error), severity="warning")
+
+    async def _show_saved_session(self, saved: SavedSession | None) -> None:
+        """Перестроить диалог из сохранённых обменов или начать пустой."""
+        data = saved.data if saved is not None else SessionData((), (), ())
+        self._saved_session = saved
+        self._saved_exchanges = list(data.exchanges)
+        self.session.restore_model_history(data.model_history)
+        self._file_edits.reset()
+        editor = self.query_one(MessageInput)
+        editor.restore_history(data.prompts)
+        container = self.query_one("#chat_container", VerticalScroll)
+        self._display_revision += 1
+        self._follow_scroll_y = None
+        self.current_exchange = ""
+        self.query_one("#chat_welcome").set_class(bool(data.exchanges), "hidden")
+        await container.remove_children(Markdown)
+        self._active_exchange = Markdown(classes="chat_exchange")
+        await container.mount(
+            *(Markdown(exchange, classes="chat_exchange") for exchange in data.exchanges),
+            self._active_exchange,
+        )
+        self.call_after_refresh(container.scroll_end, animate=False)
+        editor.focus()
+
+    async def _handle_session_command(self, command: str, argument: str) -> None:
+        """Открыть, перечислить или сменить диалоги текущего проекта."""
+        if command == "/new" and not argument:
+            await self._show_saved_session(None)
+            return
+        try:
+            if self._store is None:
+                raise SessionStoreError("Хранилище диалогов недоступно.")
+            if command == "/resume" and argument:
+                saved = await asyncio.to_thread(self._store.load, argument)
+                if saved is not None:
+                    await self._show_saved_session(saved)
+                    return
+                result = "Диалог с таким идентификатором не найден в этом проекте. Список: `/sessions`."
+            elif command == "/sessions" and not argument:
+                rows = await asyncio.to_thread(self._store.recent)
+                if rows:
+                    lines = "\n".join(f"{session_id}  {title}" for session_id, title in rows)
+                    result = f"**Сохранённые диалоги**\n\n```text\n{lines}\n```\n\nОткрыть: `/resume ID`."
+                else:
+                    result = "В этом проекте пока нет сохранённых диалогов."
+            else:
+                usage = "/resume ID" if command == "/resume" else command
+                result = f"Использование: `{usage}`."
+        except SessionStoreError as error:
+            result = f"**Ошибка:** {error}"
+        await self._begin_exchange()
+        self.update_chat_display(result)
 
     async def review_file(self, review: FileReview) -> bool:
         """Показать подтверждение в диалоге и вернуть фокус после выбора."""
@@ -306,9 +416,9 @@ class ChatScreen(Screen):
             return await review.wait_for_decision()
         finally:
             self._file_review = None
-            if review.is_mounted:
+            if review.is_mounted and not self._chat_closing:
                 await review.remove()
-            if self.is_mounted:
+            if self.is_mounted and not self._chat_closing:
                 editor.remove_class("hidden")
                 editor.disabled = False
                 editor.focus()
@@ -417,7 +527,7 @@ class ChatScreen(Screen):
             if timer is not None:
                 timer.stop()
                 timer = None
-            if not self.is_mounted or not (pending or error):
+            if self._chat_closing or not self.is_mounted or not (pending or error):
                 return
             if not final and not last_update.is_done:
                 timer = self.set_timer(_RESPONSE_FRAME_INTERVAL, paint)

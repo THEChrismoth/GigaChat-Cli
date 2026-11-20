@@ -5,6 +5,8 @@ from contextlib import aclosing
 from pathlib import Path
 from typing import AsyncGenerator, Callable, Coroutine
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 from gigachat_cli.core.command import CommandUtils
 from gigachat_cli.core.model import StreamChunk, chat_manager, get_answer_stream
 from gigachat_cli.core.file import FileUtils
@@ -51,6 +53,20 @@ class ChatSession:
     def set_model(self, model: str) -> None:
         """Сохранить выбранную модель."""
         chat_manager.config.set_model(model)
+
+    def export_model_history(self) -> tuple[tuple[str, str], ...]:
+        """Сохранить только текстовые сообщения пользователя и модели."""
+        return tuple(
+            ("user" if isinstance(message, HumanMessage) else "assistant", message.content)
+            for message in chat_manager.conversation_history
+            if isinstance(message, (HumanMessage, AIMessage)) and isinstance(message.content, str)
+        )[-20:]
+
+    def restore_model_history(self, history: tuple[tuple[str, str], ...]) -> None:
+        """Заменить контекст модели и сбросить недоступный в новом диалоге откат."""
+        message_types = {"user": HumanMessage, "assistant": AIMessage}
+        chat_manager.conversation_history = [message_types[role](content=text) for role, text in history]
+        self._undo = None
 
     async def answer(self, prompt: str) -> AsyncGenerator[StreamChunk, None]:
         """Ответить с учётом истории модели и рабочей директории сессии."""

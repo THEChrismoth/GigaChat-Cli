@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 from textual.app import App
@@ -12,6 +13,7 @@ from gigachat_cli.main import Main
 from gigachat_cli.core import session
 from gigachat_cli.screens.chat import ChatScreen
 from gigachat_cli.widgets.file_review import FileReview
+from gigachat_cli.core.sessions import SessionStore
 from gigachat_cli.core.config import DEFAULT_MODEL, Config
 from gigachat_cli.core.model import StreamChunk
 from gigachat_cli.core.command import split_command_arguments
@@ -568,7 +570,7 @@ async def test_long_inline_review_scrolls_and_keeps_chat_history(tmp_path, monke
         return snapshot.propose("\n".join(f"Строка {i}" for i in range(60)))
 
     monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
-    async with Main().run_test(size=(60, 24)) as pilot:
+    async with Main(persist_sessions=False).run_test(size=(60, 24)) as pilot:
         screen = pilot.app.screen
         screen.session._commands.current_directory = tmp_path
         await send(pilot, "/help")
@@ -744,7 +746,7 @@ async def test_main_uses_terminal_palette_and_help_stays_in_chat(monkeypatch, no
         monkeypatch.setenv("NO_COLOR", "1")
     else:
         monkeypatch.delenv("NO_COLOR", raising=False)
-    async with Main().run_test() as pilot:
+    async with Main(persist_sessions=False).run_test() as pilot:
         chat_screen = pilot.app.screen
         assert isinstance(chat_screen, ChatScreen)
         assert pilot.app.focused.id == "message_input"
@@ -763,7 +765,7 @@ async def test_main_uses_terminal_palette_and_help_stays_in_chat(monkeypatch, no
 
 async def test_welcome_logo_adapts_to_width_and_hides_after_submit(answers):
     answers([StreamChunk("Ответ", is_final=True)])
-    async with Main().run_test(size=(120, 40)) as pilot:
+    async with Main(persist_sessions=False).run_test(size=(120, 40)) as pilot:
         screen = pilot.app.screen
         banner = screen.query_one("#chat_banner")
         assert "░" in str(banner.render())
@@ -777,3 +779,87 @@ async def test_welcome_logo_adapts_to_width_and_hides_after_submit(answers):
         await send(pilot, "Первый вопрос")
         assert screen.query_one("#chat_welcome").has_class("hidden")
         assert "Ответ" in chat_text(screen)
+
+
+async def test_main_restores_conversation_context_and_can_switch_dialogs(tmp_path, monkeypatch):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    project = tmp_path / "repo"
+    project.mkdir()
+    home = tmp_path / "home"
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(chat_manager, "conversation_history", [])
+    received_context = []
+
+    async def answer(prompt, project_path):
+        received_context.append([message.content for message in chat_manager.conversation_history])
+        chat_manager.conversation_history.extend([HumanMessage(content=prompt), AIMessage(content="Ответ")])
+        yield StreamChunk("Ответ", is_final=True)
+
+    monkeypatch.setattr(session, "get_answer_stream", answer)
+    store = SessionStore(home / ".gigachat" / "sessions.sqlite3", project)
+    async with Main().run_test() as pilot:
+        await send(pilot, "Первый вопрос")
+    first = store.load()
+    assert first is not None
+    assert first.data.model_history == (("user", "Первый вопрос"), ("assistant", "Ответ"))
+    chat_manager.conversation_history.clear()
+
+    async with Main().run_test() as pilot:
+        screen = pilot.app.screen
+        assert "Первый вопрос" in chat_text(screen)
+        await pilot.press("f3")
+        assert screen.query_one(MessageInput).text == "Первый вопрос"
+        await send(pilot, "Продолжи")
+        assert received_context[-1] == ["Первый вопрос", "Ответ"]
+        await send(pilot, "/new")
+        assert not chat_text(screen).strip()
+        await send(pilot, "Другой диалог")
+        assert received_context[-1] == []
+        second = store.load()
+        assert second.id != first.id
+        await send(pilot, "/sessions")
+        assert first.id in chat_text(screen) and second.id in chat_text(screen)
+        await send(pilot, "/resume " + first.id)
+        assert "Продолжи" in chat_text(screen)
+        assert "Другой диалог" not in chat_text(screen)
+
+
+async def test_session_does_not_persist_shell_output_or_pending_diff(tmp_path, monkeypatch, answers):
+    answers([StreamChunk("Ответ", is_final=True)])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    store = SessionStore(tmp_path / ".gigachat" / "sessions.sqlite3", tmp_path)
+
+    async def execute(command):
+        return True, "секретный вывод теста", 0
+
+    async def propose(snapshot, instruction):
+        return snapshot.propose("Содержимое незаписанного файла")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    monkeypatch.setattr(chat_manager, "conversation_history", [])
+    async with Main().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        monkeypatch.setattr(screen.session, "execute_command", execute)
+        await send(pilot, "!echo тестовые данные")
+        assert "секретный вывод теста" in chat_text(screen)
+        await send(pilot, "Вопрос")
+        saved = store.load()
+        assert saved.data.prompts == ("Вопрос",)
+        assert "секретный вывод теста" not in " ".join(saved.data.exchanges)
+        await send(pilot, "Создай файл new.txt с примером", wait=False)
+        assert screen.query_one(FileReview)
+        assert store.load() == saved
+        pending = screen.session.task
+        pilot.app.exit()
+
+    await asyncio.wait_for(pending, timeout=5)
+    assert not (tmp_path / "new.txt").exists()
+    assert store.load() == saved
+    async with Main().run_test() as pilot:
+        screen = pilot.app.screen
+        assert not screen.query(FileReview)
+        assert "Вопрос" in chat_text(screen)

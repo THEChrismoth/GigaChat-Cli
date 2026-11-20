@@ -37,6 +37,18 @@ class MessageInput(TextArea):
         self._history_index = len(self._messages)
         self._draft = ""
 
+    @property
+    def submitted_messages(self) -> tuple[str, ...]:
+        """Вернуть историю ввода для сохранения сессии."""
+        return tuple(self._messages)
+
+    def restore_history(self, messages: tuple[str, ...]) -> None:
+        """Заменить историю ввода и сбросить черновик прежнего диалога."""
+        self._messages = list(messages[-100:])
+        self._history_index = len(self._messages)
+        self._draft = ""
+        self.text = ""
+
     def action_submit(self) -> None:
         """Попросить экран обработать Enter."""
         self.post_message(self.Submitted())
