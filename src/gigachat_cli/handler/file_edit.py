@@ -8,11 +8,22 @@ from typing import TYPE_CHECKING
 from gigachat_cli.widgets.message_input import MessageInput
 
 from gigachat_cli.widgets.file_review import FileReview
-from gigachat_cli.core.command import split_command_arguments
+from gigachat_cli.core.command import CommandArgument, split_command_arguments
 from gigachat_cli.core.file_edit import FileEdit, FileEditError
 
 if TYPE_CHECKING:
     from gigachat_cli.screens.chat import ChatScreen
+
+
+_EDIT_REQUEST = re.compile(
+    r"^(?:пожалуйста[,\s]+|мож(?:ешь|ете)\s+|please[,\s]+|(?:can|could) you\s+)?"
+    r"(?:созда(?:й(?:те)?|ть)|сдела(?:й(?:те)?|ть)|исправ(?:ь(?:те)?|ить)|"
+    r"добав(?:ь(?:те)?|ить)|запиш(?:и(?:те)?|ать)|отредактируй(?:те)?|отредактировать|"
+    r"измени(?:те|ть)?|обнови(?:те|ть)?|перепиш(?:и(?:те)?|ать)|замени(?:те|ть)?|"
+    r"напиш(?:и(?:те)?|ать)|create|make|edit|update|fix|add|write|replace)\b",
+    re.IGNORECASE,
+)
+_FILE_WORD = re.compile(r"\b(?:файл(?:а|е|ом|ы|ов|у)?|files?)\b", re.IGNORECASE)
 
 
 def _escape_markdown(text: str) -> str:
@@ -23,6 +34,22 @@ def _escape_markdown(text: str) -> str:
 def _has_file_suffix(value: str) -> bool:
     """Узнать кандидата с расширением, исключая ссылки."""
     return "://" not in value and bool(PureWindowsPath(value).suffix.strip("."))
+
+
+def _path_candidates(arguments: list[CommandArgument]) -> set[str]:
+    """Собрать упомянутые имена файлов, отбросив пунктуацию фразы."""
+    candidates = set()
+    for argument in arguments:
+        value = argument.value if argument.quote else argument.value.strip("«»()\x60,;!?").rstrip(".")
+        if _has_file_suffix(value):
+            candidates.add(value)
+    return candidates
+
+
+def _natural_arguments(text: str) -> list[CommandArgument]:
+    """Разобрать пути в кавычках, включая Markdown и русские кавычки."""
+    quoted = re.sub(r"\x60([^\x60\r\n]+)\x60|«([^»\r\n]+)»", r'"\1\2"', text)
+    return split_command_arguments(quoted)
 
 
 def _parse_edit_request(text: str) -> tuple[str, str]:
@@ -37,12 +64,7 @@ def _parse_edit_request(text: str) -> tuple[str, str]:
     if first.quote or _has_file_suffix(path) or ("://" not in path and ("/" in path or "\\" in path)):
         return path, text[arguments[2].start:]
 
-    candidates = set()
-    for argument in arguments[2:]:
-        # В естественной фразе имя может стоять в скобках или перед запятой.
-        value = argument.value if argument.quote else argument.value.strip("«»()\x60,;!?").rstrip(".")
-        if _has_file_suffix(value):
-            candidates.add(value)
+    candidates = _path_candidates(arguments[2:])
     if len(candidates) != 1:
         raise FileEditError(hint)
     return candidates.pop(), text[first.start:]
@@ -51,24 +73,65 @@ def _parse_edit_request(text: str) -> tuple[str, str]:
 class FileEditHandler:
     """Показать предложения модели и запросить подтверждение записи."""
 
+    def __init__(self) -> None:
+        """Начать без задания, ожидающего уточнения пути."""
+        self._pending_instruction: str | None = None
+
+    def reset(self) -> None:
+        """Сбросить незавершённое уточнение при смене диалога."""
+        self._pending_instruction = None
+
+    def _natural_request(self, text: str) -> tuple[set[str], str] | None:
+        """Распознать прямую просьбу о правке или ответ с одним путём."""
+        pending, self._pending_instruction = self._pending_instruction, None
+        text = text.strip()
+        if text.startswith(("/", "!")):
+            return None
+        if pending:
+            arguments = _natural_arguments(text)
+            if len(arguments) == 1:
+                path = arguments[0].value
+                if path and (arguments[0].quote or _has_file_suffix(path) or "/" in path or "\\" in path):
+                    return {path}, pending
+        if not _EDIT_REQUEST.match(text):
+            return None
+        paths = _path_candidates(_natural_arguments(text))
+        if paths or _FILE_WORD.search(text):
+            return paths, text
+        return None
+
     async def handle(self, user_text: str, input_field: MessageInput, screen: "ChatScreen") -> bool:
         """Подготовить правку или показать обратное изменение."""
         command = user_text.split(maxsplit=1)[0]
-        if command not in {"/edit", "/undo"}:
+        request = self._natural_request(user_text)
+        if command not in {"/edit", "/undo"} and request is None:
             return False
 
         input_field.text = ""
         undo = command == "/undo"
+        heading = ""
         try:
             if undo:
                 if user_text != "/undo":
                     raise FileEditError("Использование: /undo")
                 edit = screen.session.undo_edit()
             else:
-                path, instruction = _parse_edit_request(user_text)
+                if request is None:
+                    path, instruction = _parse_edit_request(user_text)
+                else:
+                    paths, instruction = request
+                    if len(paths) != 1:
+                        self._pending_instruction = instruction
+                        screen.update_chat_display(
+                            "Какой файл нужно изменить? Ответьте одним путём, например `test.txt`. "
+                            "Путь с пробелами или без расширения заключите в кавычки."
+                        )
+                        return True
+                    path = next(iter(paths))
                 snapshot = screen.session.snapshot(path)
                 name = _escape_markdown(snapshot.relative_path.as_posix())
-                screen.update_chat_display(f"**Правка файла:** {name}")
+                heading = f"**Вы:** {_escape_markdown(instruction)}\n\n"
+                screen.update_chat_display(f"{heading}**Правка файла:** {name}")
                 screen.set_operation_status("Подготовка правки")
                 edit = await screen.session.propose_edit(snapshot, instruction)
 
@@ -81,12 +144,15 @@ class FileEditHandler:
             return True
 
         path = edit.before.root / edit.before.relative_path
-        screen.update_chat_display("**Предлагаемый откат**" if undo else "**Предлагаемая правка**")
+        if undo:
+            screen.update_chat_display("**Предлагаемый откат**")
         approved = await screen.review_file(FileReview(path, diff, undo=undo))
-        self._finish_review(screen, edit, undo, approved)
+        self._finish_review(screen, edit, undo, approved, heading)
         return True
 
-    def _finish_review(self, screen: "ChatScreen", edit: FileEdit, undo: bool, approved: bool) -> None:
+    def _finish_review(
+        self, screen: "ChatScreen", edit: FileEdit, undo: bool, approved: bool, heading: str
+    ) -> None:
         """Применить подтверждённый вариант и сообщить результат в чате."""
         name = _escape_markdown(edit.before.relative_path.as_posix())
         if not approved:
@@ -99,4 +165,4 @@ class FileEditHandler:
             else:
                 verb = "отменено" if undo else "применено. /undo — откатить"
                 result = f"Изменение файла **{name}** {verb}."
-        screen.update_chat_display(result)
+        screen.update_chat_display(heading + result)

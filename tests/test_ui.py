@@ -511,6 +511,43 @@ async def test_file_edit_uses_filename_from_natural_request(tmp_path, monkeypatc
         assert not (tmp_path / "сделай").exists()
 
 
+@pytest.mark.parametrize("clarify", [False, True])
+async def test_direct_chat_request_opens_review_for_the_selected_path(tmp_path, monkeypatch, clarify):
+    prompt = "Создай файл с приветствием" if clarify else "Создай файл «мои заметки.txt» с приветствием"
+    calls = []
+
+    async def propose(snapshot, instruction):
+        calls.append((snapshot.relative_path.name, instruction))
+        return snapshot.propose("Привет\n")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, prompt, wait=clarify)
+        if clarify:
+            assert "Какой файл" in chat_text(screen)
+            assert not calls
+            await send(pilot, '"мои заметки.txt"', wait=False)
+        assert calls == [("мои заметки.txt", prompt)]
+        assert screen.query_one(FileReview).path == tmp_path / "мои заметки.txt"
+        assert not list(tmp_path.iterdir())
+        await pilot.press("2")
+        assert (tmp_path / "мои заметки.txt").read_text(encoding="utf-8") == "Привет\n"
+
+
+async def test_file_advice_stays_a_regular_chat_request(answers, monkeypatch):
+    async def unexpected_edit(snapshot, instruction):
+        pytest.fail("Вопрос о файле попал в обработчик правок")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", unexpected_edit)
+    fake = answers([StreamChunk("Совет", is_final=True)])
+    async with ChatApp().run_test() as pilot:
+        await send(pilot, "Как улучшить README.md?")
+        assert fake.calls[0][0] == "Как улучшить README.md?"
+        assert not pilot.app.screen.query(FileReview)
+
+
 @pytest.mark.parametrize("instruction", ["сделай новый файл", "обнови first.txt и second.txt"])
 async def test_file_edit_requires_explicit_path_when_request_is_ambiguous(tmp_path, monkeypatch, instruction):
     async def propose(snapshot, request):
