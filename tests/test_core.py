@@ -376,30 +376,57 @@ async def test_project_analysis_uses_project_path(manager, fake_giga, project):
     assert manager.conversation_history[0].content == "Покажи структуру проекта"
 
 
-@pytest.mark.parametrize("request_text", ["Сделай ревью моего проекта", "Ревью без изменения файлов"])
-async def test_project_review_includes_source_ahead_of_docs(manager, fake_giga, project, request_text):
-    for number in range(6):
-        (project / f"doc{number}.md").write_text("Описание", encoding="utf-8")
-    artifacts = project / "build"
-    artifacts.mkdir()
-    (artifacts / "generated.py").write_text("print('generated')", encoding="utf-8")
+@pytest.mark.parametrize("prompt", ["Сделай ревью моего проекта", "Ревью без изменения файлов", "/review main.py"])
+async def test_review_requests_and_reads_source_without_executing_writes(manager, monkeypatch, project, prompt):
+    calls = iter([
+        ("search_code", {"query": "root main"}),
+        ("read_file", {"path": "main.py", "start_line": 1, "line_count": 1}),
+        ("write_file", {"path": "main.py", "content": "changed"}),
+    ])
+    requests = []
 
-    await collect(manager.get_answer_stream(request_text, project_path=str(project)))
+    async def invoke(messages):
+        requests.append(list(messages))
+        call = next(calls, None)
+        if call:
+            name, args = call
+            return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])
+        return AIMessage(content="Замечание в main.py:1")
 
-    messages = fake_giga.requests[0]
-    assert "по убыванию серьёзности" in messages[0].content
-    assert "print('root main')" in messages[-1].content
-    assert "generated.py" not in messages[-1].content
-    assert manager.conversation_history[0].content == request_text
+    def bind(tools, *, tool_choice):
+        assert {tool["name"] for tool in tools} == {"list_files", "search_code", "read_file"}
+        return SimpleNamespace(ainvoke=invoke)
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(bind_tools=bind))
+    chunks = await collect(manager.get_answer_stream(prompt, project_path=str(project)))
+
+    assert chunks[0].content == "Замечание в main.py:1" and chunks[-1].is_final
+    assert json.loads(requests[1][-1].content)["matches"][0]["path"] == "main.py"
+    assert json.loads(requests[2][-1].content)["lines"] == [{"line": 1, "text": "print('root main')"}]
+    assert "error" in json.loads(requests[3][-1].content)
+    assert (project / "main.py").read_text() == "print('root main')\n"
+    assert [message.content for message in manager.conversation_history] == [prompt, chunks[0].content]
+    assert manager.get_conversation_stats()["last_files_context"] == ["main.py"]
 
 
-async def test_review_of_named_file_uses_its_content(manager, fake_giga, project):
-    await collect(manager.get_answer_stream("Сделай ревью main.py без изменений", project_path=str(project)))
+async def test_review_stops_tool_calls_at_budget(manager, monkeypatch, project):
+    choices = []
 
-    messages = fake_giga.requests[0]
-    assert "по убыванию серьёзности" in messages[0].content
-    assert "print('root main')" in messages[-1].content
-    assert "print('pkg main')" not in messages[-1].content
+    def bind(tools, *, tool_choice):
+        choices.append(tool_choice)
+
+        async def invoke(messages):
+            if tool_choice == "none":
+                assert len([message for message in messages if message.type == "tool"]) == core._REVIEW_TOOL_LIMIT
+                return AIMessage(content="Итоги просмотренного кода")
+            return AIMessage(content="", tool_calls=[{"name": "list_files", "args": {}, "id": str(len(messages))}])
+
+        return SimpleNamespace(ainvoke=invoke)
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(bind_tools=bind))
+    chunks = await collect(manager.get_answer_stream("/review", project_path=str(project)))
+    assert choices == ["auto", "none"]
+    assert chunks[0].content == "Итоги просмотренного кода"
 
 
 async def test_explain_inline_code(manager, fake_giga):

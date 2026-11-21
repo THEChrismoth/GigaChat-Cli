@@ -4,10 +4,10 @@ import re
 
 
 _REVIEW_REQUEST = re.compile(
-    r"^\s*(?:(?:а|пожалуйста|давай(?:те)?|можешь|можете|можно|сделай|сделаем|сделать|"
+    r"^\s*(?:/review(?=\s|$)|(?:(?:а|пожалуйста|давай(?:те)?|можешь|можете|можно|сделай|сделаем|сделать|"
     r"проведи|провести|сделайте|проведите|код|please|do|a|can you|could you)[,\s]+)*"
     r"(?:(?:код-)?ревью(?=\s|[:,]|[.!?]?\s*$)|code\s+review\b|"
-    r"review\b(?=\s*$|\s+(?:(?:my|this|the)\s+)?(?:project|code|files?|without)\b))",
+    r"review\b(?=\s*$|\s+(?:(?:my|this|the)\s+)?(?:project|code|files?|without)\b)))",
     re.IGNORECASE,
 )
 _FILE_OR_CODE = r"(?:файл(?:а|е|ом|ы|ов|у|ах|ами)?|код(?:а|е|ом|у)?)\b"

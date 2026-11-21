@@ -13,6 +13,7 @@ from textual.timer import Timer
 from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual import events
 
+from gigachat_cli.core.intent import is_review_request
 from gigachat_cli.core.session import ChatSession
 from gigachat_cli.core.sessions import MAX_SAVED_EXCHANGES, SavedSession, SessionData, SessionStore, SessionStoreError
 from gigachat_cli.utils.list import ListUtils
@@ -447,7 +448,7 @@ class ChatScreen(Screen):
         """
         input_field.text = ""
 
-        self.set_operation_status("Ожидание ответа")
+        self.set_operation_status("Ревью проекта" if is_review_request(user_text) else "Ожидание ответа")
         input_field.focus()
 
         await self.get_bot_response_stream(user_text)
