@@ -128,6 +128,8 @@ async def _format_python(snapshot: FileSnapshot, data: bytes) -> str:
 
 def _target(root: Path, relative_path: Path) -> Path:
     """Проверить границы проекта и исключить ссылки, перенаправления и метаданные VCS."""
+    if any(part.casefold() in _METADATA_DIRS for part in root.parts):
+        raise FileEditError("Этот путь исключён из редактирования.")
     if relative_path.anchor or not relative_path.parts or ".." in relative_path.parts:
         raise FileEditError("Укажите относительный путь к файлу внутри проекта.")
     for part in relative_path.parts:
@@ -160,6 +162,12 @@ def _target(root: Path, relative_path: Path) -> Path:
     return path
 
 
+def read_project_prefix(root: Path, path: Path, limit: int) -> bytes:
+    """Прочитать ограниченный префикс обычного файла внутри проекта."""
+    with _target(root, path).open("rb") as stream:
+        return stream.read(limit)
+
+
 def _read(path: Path) -> bytes | None:
     """Прочитать ограниченный снимок файла, отличая отсутствие от пустого файла."""
     try:
@@ -174,8 +182,6 @@ def read_snapshot(root: Path, path: str) -> FileSnapshot:
     if path.endswith(("/", os.sep)):
         raise FileEditError("Укажите путь к файлу без завершающего разделителя.")
     root = root.resolve(strict=True)
-    if any(part.casefold() in _METADATA_DIRS for part in root.parts):
-        raise FileEditError("Этот путь исключён из редактирования.")
     relative_path = Path(path)
     data = _read(_target(root, relative_path))
     if data is not None:
