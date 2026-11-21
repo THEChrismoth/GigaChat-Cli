@@ -1,13 +1,17 @@
 """Снимки текстовых файлов, предпросмотр изменений и запись после подтверждения."""
 
+import asyncio
 import codecs
+import os
+import stat
+import warnings
 from dataclasses import dataclass, replace
 from difflib import unified_diff
 from io import StringIO
-import os
 from pathlib import Path
-import stat
 from tempfile import NamedTemporaryFile
+
+from ruff import find_ruff_bin
 
 
 MAX_EDIT_BYTES = 15_000
@@ -16,6 +20,10 @@ _METADATA_DIRS = {".git", ".hg", ".svn"}
 
 class FileEditError(ValueError):
     """Файл нельзя прочитать, изменить или восстановить в текущем состоянии."""
+
+
+class PythonSyntaxError(FileEditError):
+    """Предлагаемый Python-код не проходит компиляцию."""
 
 
 def _validate_text(text: str) -> str:
@@ -67,6 +75,55 @@ class FileSnapshot:
             data = codecs.BOM_UTF8 + data
         _decode(data)
         return FileEdit(self, data)
+
+
+async def prepare_file_edit(snapshot: FileSnapshot, content: str) -> "FileEdit":
+    """Проверить синтаксис предлагаемого Python-кода и оформить новый файл."""
+    edit = snapshot.propose(content)
+    if snapshot.relative_path.suffix.casefold() != ".py" or edit.after == snapshot.data:
+        return edit
+
+    data = edit.after or b""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            compile(data, str(snapshot.relative_path), "exec", dont_inherit=True)
+    except SyntaxError as error:
+        location = f" в строке {error.lineno}" if error.lineno else ""
+        raise PythonSyntaxError(f"Ошибка синтаксиса Python{location}: {error.msg}.") from error
+
+    if snapshot.data is None and data:
+        return snapshot.propose(await _format_python(snapshot, data))
+    return edit
+
+
+async def _format_python(snapshot: FileSnapshot, data: bytes) -> str:
+    """Отформатировать новый файл через stdin без записи в проект."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            find_ruff_bin(), "format", "--no-cache", "--stdin-filename", str(snapshot.relative_path), "-",
+            cwd=snapshot.root, stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as error:
+        raise FileEditError("Не удалось запустить Ruff для форматирования Python-файла.") from error
+
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(data), timeout=10)
+    except (TimeoutError, asyncio.CancelledError) as error:
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+        if isinstance(error, TimeoutError):
+            raise FileEditError("Истекло время форматирования Python-файла.") from error
+        raise
+    if process.returncode != 0:
+        details = stderr.decode("utf-8", errors="replace").strip()
+        raise FileEditError(f"Ruff не смог отформатировать Python-файл. {details}")
+    return _decode(stdout)
 
 
 def _target(root: Path, relative_path: Path) -> Path:

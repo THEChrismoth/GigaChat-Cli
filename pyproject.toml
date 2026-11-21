@@ -12,6 +12,7 @@ dependencies = [
     # На Python 3.14 SDK GigaChat (pydantic.v1) с pydantic 2.12 падает с ошибкой
     # 'unable to infer type for attribute "x_headers"'
     "pydantic>=2.13; python_version >= '3.14'",
+    "ruff==0.17.2",
     "textual>=6.2.0",
 ]
 classifiers = [
@@ -28,7 +29,6 @@ classifiers = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=1.0",
-    "ruff==0.17.2",
 ]
 
 [project.scripts]

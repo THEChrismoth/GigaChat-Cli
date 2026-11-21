@@ -1,5 +1,7 @@
 import asyncio
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from textual.app import App
@@ -591,15 +593,43 @@ async def test_direct_chat_request_opens_review_for_the_selected_path(tmp_path, 
         assert (tmp_path / "мои заметки.txt").read_text(encoding="utf-8") == "Привет\n"
 
 
-async def test_file_advice_stays_a_regular_chat_request(answers, monkeypatch):
+@pytest.mark.parametrize(("instruction", "yolo"), [
+    ("с делать файл test.py с программой привет мир", False),
+    ("Давай, пожалуйста, сделаем файл `test.py`, который выводит привет мир", True),
+])
+async def test_direct_python_creation_formats_the_diff_and_written_file(tmp_path, monkeypatch, instruction, yolo):
+    target = tmp_path / "test.py"
+
+    async def invoke(messages):
+        request = json.loads(messages[-1].content)
+        assert request["path"] == target.name
+        assert request["instruction"] == instruction
+        return SimpleNamespace(content='```python\nprint("Привет, мир!"\n)\n```', response_metadata={})
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(chat_manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
+    async with Main(yolo=yolo, persist_sessions=False).run_test() as pilot:
+        await send(pilot, instruction, wait=yolo)
+        if not yolo:
+            review = pilot.app.screen.query_one(FileReview)
+            assert review.path == target
+            assert '+print("Привет, мир!")\n' in review.diff
+            assert "+)" not in review.diff
+            assert not target.exists()
+            await pilot.press("2")
+        assert target.read_text(encoding="utf-8") == 'print("Привет, мир!")\n'
+
+
+@pytest.mark.parametrize("question", ["Как улучшить README.md?", "А можно ли сделать файл test.py короче?"])
+async def test_file_advice_stays_a_regular_chat_request(answers, monkeypatch, question):
     async def unexpected_edit(snapshot, instruction):
         pytest.fail("Вопрос о файле попал в обработчик правок")
 
     monkeypatch.setattr(chat_manager, "propose_file_edit", unexpected_edit)
     fake = answers([StreamChunk("Совет", is_final=True)])
     async with ChatApp().run_test() as pilot:
-        await send(pilot, "Как улучшить README.md?")
-        assert fake.calls[0][0] == "Как улучшить README.md?"
+        await send(pilot, question)
+        assert fake.calls[0][0] == question
         assert not pilot.app.screen.query(FileReview)
 
 

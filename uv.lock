@@ -96,6 +96,7 @@ source = { editable = "." }
 dependencies = [
     { name = "langchain-gigachat" },
     { name = "pydantic", marker = "python_full_version >= '3.14'" },
+    { name = "ruff" },
     { name = "textual" },
 ]
 
@@ -103,13 +104,13 @@ dependencies = [
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "langchain-gigachat", specifier = ">=0.3.12" },
     { name = "pydantic", marker = "python_full_version >= '3.14'", specifier = ">=2.13" },
+    { name = "ruff", specifier = "==0.17.2" },
     { name = "textual", specifier = ">=6.2.0" },
 ]
 
@@ -117,7 +118,6 @@ requires-dist = [
 dev = [
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=1.0" },
-    { name = "ruff", specifier = "==0.17.2" },
 ]
 
 [[package]]

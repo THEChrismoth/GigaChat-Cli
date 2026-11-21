@@ -1,3 +1,4 @@
+import json
 import os
 from types import SimpleNamespace
 
@@ -233,6 +234,48 @@ async def test_propose_file_edit_is_isolated(manager, monkeypatch, tmp_path, con
             await manager.propose_file_edit(snapshot, "Измени текст")
     assert target.read_bytes() == b"original"
     assert [message.content for message in manager.conversation_history] == ["Другое сообщение"]
+
+
+@pytest.mark.parametrize("corrected", [True, False])
+async def test_python_proposal_retries_syntax_error_once(manager, monkeypatch, tmp_path, corrected):
+    target = tmp_path / "example.py"
+    broken = "return 1\n"
+    replies = iter([broken, 'print("ok")\n' if corrected else broken])
+    requests = []
+
+    async def invoke(messages):
+        requests.append(json.loads(messages[-1].content))
+        return AIMessage(content=json.dumps({"content": next(replies)}))
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
+    snapshot = read_snapshot(tmp_path, target.name)
+    if corrected:
+        edit = await manager.propose_file_edit(snapshot, "Выведи ok")
+        assert edit.after == b'print("ok")\n'
+    else:
+        with pytest.raises(FileEditError, match="Ошибка синтаксиса Python в строке 1"):
+            await manager.propose_file_edit(snapshot, "Выведи ok")
+
+    assert len(requests) == 2
+    assert requests[1]["instruction"] == requests[0]["instruction"] == "Выведи ok"
+    assert requests[1]["path"] == requests[0]["path"] == target.name
+    assert requests[1]["previous_proposal"] == broken
+    assert "outside function" in requests[1]["syntax_error"]
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(("opening", "closing"), [("python\n```", "```"), ("```python", "``` ```")])
+async def test_new_python_proposal_preserves_docstring_quotes(manager, monkeypatch, tmp_path, opening, closing):
+    source = 'def greeting():\n    """Вернуть приветствие."""\n    return "Привет!"\n'
+
+    async def invoke(messages):
+        return AIMessage(content=f"{opening}\n{source}{closing}")
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
+
+    edit = await manager.propose_file_edit(read_snapshot(tmp_path, "greeting.py"), "Напиши функцию с docstring")
+
+    assert edit.after == source.encode()
 
 
 async def test_send_message_stream(manager, fake_giga):

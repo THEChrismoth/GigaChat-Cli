@@ -3,7 +3,26 @@ import stat
 
 import pytest
 
-from gigachat_cli.core.file_edit import FileEditError, MAX_EDIT_BYTES, read_snapshot
+from gigachat_cli.core.file_edit import FileEditError, MAX_EDIT_BYTES, prepare_file_edit, read_snapshot
+
+
+@pytest.mark.parametrize("original", [None, b"print('original')\n"])
+async def test_python_proposal_rejects_code_that_cannot_compile(tmp_path, original):
+    target = tmp_path / "example.py"
+    if original is not None:
+        target.write_bytes(original)
+    with pytest.raises(FileEditError, match="Ошибка синтаксиса Python в строке 1"):
+        await prepare_file_edit(read_snapshot(tmp_path, target.name), "return 1\n")
+
+
+async def test_python_edit_preserves_the_style_of_an_existing_file(tmp_path):
+    target = tmp_path / "example.py"
+    target.write_bytes(b"print(\r\n    'original'\r\n)\r\n")
+    replacement = "print(\n    'new'\n)\n"
+
+    edit = await prepare_file_edit(read_snapshot(tmp_path, target.name), replacement)
+
+    assert edit.after == replacement.replace("\n", "\r\n").encode()
 
 
 def test_edit_preview_apply_and_undo_preserve_bytes(tmp_path):

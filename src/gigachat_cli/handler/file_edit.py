@@ -17,8 +17,9 @@ if TYPE_CHECKING:
 
 
 _EDIT_REQUEST = re.compile(
-    r"^(?:пожалуйста[,\s]+|мож(?:ешь|ете)\s+|please[,\s]+|(?:can|could) you\s+)?"
-    r"(?:созда(?:й(?:те)?|ть)|сдела(?:й(?:те)?|ть)|исправ(?:ь(?:те)?|ить)|"
+    r"^(?:(?:а|пожалуйста|давай(?:те)?|мож(?:ешь|ете|но)|прошу|"
+    r"(?:мне\s+)?(?:нужно|надо)|please|(?:can|could) you)[,:\s]+)*"
+    r"(?:созда(?:й(?:те)?|ть|дим)|(?:с\s*)?дела(?:й(?:те)?|ть|ем)|исправ(?:ь(?:те)?|ить)|"
     r"добав(?:ь(?:те)?|ить)|запиш(?:и(?:те)?|ать)|отредактируй(?:те)?|отредактировать|"
     r"измени(?:те|ть)?|обнови(?:те|ть)?|перепиш(?:и(?:те)?|ать)|замени(?:те|ть)?|"
     r"напиш(?:и(?:те)?|ать)|create|make|edit|update|fix|add|write|replace)\b",
@@ -50,6 +51,7 @@ def _path_candidates(arguments: list[CommandArgument]) -> set[str]:
 def _natural_arguments(text: str) -> list[CommandArgument]:
     """Разобрать пути в кавычках, включая Markdown и русские кавычки."""
     quoted = re.sub(r"\x60([^\x60\r\n]+)\x60|«([^»\r\n]+)»", r'"\1\2"', text)
+    quoted = re.sub(r'(?<=")[,;.!?]+(?=\s|$)', "", quoted)
     return split_command_arguments(quoted)
 
 
