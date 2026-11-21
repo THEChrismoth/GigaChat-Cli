@@ -11,13 +11,14 @@ from gigachat_cli.screens.chat import ChatScreen
 class Main(App):
     """Приложение GigaChat CLI."""
 
-    def __init__(self, *, persist_sessions: bool = True) -> None:
+    def __init__(self, *, persist_sessions: bool = True, yolo: bool = False) -> None:
         """Инициализировать вывод с палитрой терминала."""
         super().__init__(ansi_color=True)
         self.theme = "textual-ansi"
         self._persist_sessions = persist_sessions
+        self._yolo = yolo
 
     def on_mount(self) -> None:
         """Открыть чат и сразу дать фокус полю ввода."""
         store = SessionStore(Path.home() / ".gigachat" / "sessions.sqlite3", Path.cwd()) if self._persist_sessions else None
-        self.push_screen(ChatScreen(store=store))
+        self.push_screen(ChatScreen(store=store, yolo=self._yolo))

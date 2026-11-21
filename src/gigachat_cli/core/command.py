@@ -159,7 +159,7 @@ class CommandUtils:
         self.command_timeout = command_timeout
         self.file_commands = FILE_COMMANDS
 
-    async def execute_system_command(self, command: str) -> Tuple[bool, str, int]:
+    async def execute_system_command(self, command: str | tuple[str, ...]) -> Tuple[bool, str, int]:
         r"""Выполнение команды в текущей директории.
 
         На Windows команда выполняется через cmd.exe (доступны dir, type и пути с \),
@@ -167,7 +167,7 @@ class CommandUtils:
         время выполнения ограничено, при отмене задачи процесс завершается.
 
         Args:
-            command: Команда без префикса !
+            command: Команда без префикса ! или аргументы для запуска без оболочки.
 
         Returns:
             Tuple[bool, str, int]: (успех, вывод stdout и stderr, код возврата)
@@ -175,11 +175,11 @@ class CommandUtils:
         Raises:
             asyncio.CancelledError: Выполнение отменено (процесс при этом завершается)
         """
-        if not command.strip():
+        stripped = command.strip() if isinstance(command, str) else ""
+        if not (stripped or isinstance(command, tuple) and command):
             return False, "Пустая команда", 1
 
-        stripped = command.strip()
-        program = stripped.split()[0]
+        program = command[0] if isinstance(command, tuple) else stripped.split()[0]
 
         try:
             # cd меняет директорию чата, а не дочернего процесса
@@ -187,7 +187,13 @@ class CommandUtils:
                 return await self._handle_cd_command(stripped)
 
             # stdin закрыт, чтобы интерактивные команды не перехватывали терминал TUI
-            if IS_WINDOWS:
+            if isinstance(command, tuple):
+                process = await asyncio.create_subprocess_exec(
+                    *command, stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    cwd=self.current_directory,
+                )
+            elif IS_WINDOWS:
                 process = await asyncio.create_subprocess_shell(
                     stripped,
                     stdin=asyncio.subprocess.DEVNULL,

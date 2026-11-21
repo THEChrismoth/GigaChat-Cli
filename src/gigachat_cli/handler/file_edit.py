@@ -1,5 +1,6 @@
 """Команды чата для предложения и отката изменения файла."""
 
+import os
 import re
 from pathlib import PureWindowsPath
 from string import punctuation
@@ -104,11 +105,12 @@ class FileEditHandler:
         """Подготовить правку или показать обратное изменение."""
         command = user_text.split(maxsplit=1)[0]
         request = self._natural_request(user_text)
-        if command not in {"/edit", "/undo"} and request is None:
+        if command not in {"/edit", "/undo", "/fix"} and request is None:
             return False
 
         input_field.text = ""
         undo = command == "/undo"
+        check = command == "/fix"
         heading = ""
         try:
             if undo:
@@ -131,9 +133,8 @@ class FileEditHandler:
                 snapshot = screen.session.snapshot(path)
                 name = _escape_markdown(snapshot.relative_path.as_posix())
                 heading = f"**Вы:** {_escape_markdown(instruction)}\n\n"
-                screen.update_chat_display(f"{heading}**Правка файла:** {name}")
-                screen.set_operation_status("Подготовка правки")
-                edit = await screen.session.propose_edit(snapshot, instruction)
+                await self._edit_file(screen, path, name, instruction, heading, check=check)
+                return True
 
             diff = edit.diff()
             if not diff:
@@ -149,6 +150,55 @@ class FileEditHandler:
         approved = await screen.review_file(FileReview(path, diff, undo=undo))
         self._finish_review(screen, edit, undo, approved, heading)
         return True
+
+    async def _edit_file(
+        self, screen: "ChatScreen", path: str, name: str, instruction: str, heading: str, *, check: bool
+    ) -> None:
+        """Предложить правку и при необходимости повторить её после сбоя pytest."""
+        attempt_instruction = instruction
+        for attempt in range(2 if check else 1):
+            snapshot = screen.session.snapshot(path)
+            target = snapshot.root / snapshot.relative_path
+            screen.update_chat_display(f"{heading}**Правка файла:** {name}")
+            screen.set_operation_status("Подготовка правки")
+            edit = await screen.session.propose_edit(snapshot, attempt_instruction)
+            diff = edit.diff()
+            if not diff:
+                screen.update_chat_display(f"{heading}Содержимое файла не изменилось.")
+                return
+
+            automatic = (
+                screen.yolo and edit.after is not None
+                and target.is_relative_to(screen.session.project_root)
+                and screen.session.directory.resolve().is_relative_to(screen.session.project_root)
+            )
+            if not automatic:
+                if check:
+                    screen.update_chat_display(f"{heading}**Правка файла:** {name}\n\nПосле записи: `pytest -q`.")
+                if not await screen.review_file(FileReview(target, diff, undo=False)):
+                    screen.update_chat_display(f"{heading}Изменение файла **{name}** отклонено.")
+                    return
+            screen.session.apply_edit(edit)
+            result = f"Изменение файла **{name}** применено. /undo — откатить."
+            screen.update_chat_display(heading + result)
+            if not check:
+                return
+
+            screen.set_operation_status("Проверка pytest")
+            success, output, code = await screen.session.run_check()
+            key = os.getenv("GIGACHAT_API_KEY")
+            if key:
+                output = output.replace(key, "[скрыто]")
+            details = output[-4000:]
+            block = _escape_markdown(details)
+            heading += f"{result}\n\n**pytest:** код {code}.\n\n{block}\n\n"
+            screen.update_chat_display(heading.rstrip())
+            if success or code != 1 or attempt == 1:
+                return
+            attempt_instruction = (
+                f"{instruction}\n\nПредыдущая правка не прошла pytest. "
+                f"Исправь причину, если она относится к этому файлу. Вывод проверки:\n{details}"
+            )
 
     def _finish_review(
         self, screen: "ChatScreen", edit: FileEdit, undo: bool, approved: bool, heading: str

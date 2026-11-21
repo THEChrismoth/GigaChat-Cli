@@ -53,10 +53,11 @@ class ChatScreen(Screen):
 
     CSS = importlib.resources.files("gigachat_cli.styles").joinpath("chat.css").read_text()
 
-    def __init__(self, *, store: SessionStore | None = None):
+    def __init__(self, *, store: SessionStore | None = None, yolo: bool = False):
         """Создание экрана, утилит и обработчиков команд."""
         super().__init__()
         self.session = ChatSession()
+        self.yolo = yolo
         self.list_utils = ListUtils()
         self._store = store
         self._saved_session: SavedSession | None = None
@@ -90,7 +91,7 @@ class ChatScreen(Screen):
             Рабочая папка, модель, история, подсказки и поле ввода.
         """
         with Horizontal(classes="status_bar"):
-            yield Static("GigaChat", id="chat_title")
+            yield Static("GigaChat · YOLO" if self.yolo else "GigaChat", id="chat_title")
             yield Dir(classes="dir")
             yield Model(classes="model")
         with VerticalScroll(id="chat_container"):

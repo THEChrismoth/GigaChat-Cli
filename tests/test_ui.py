@@ -494,6 +494,59 @@ async def test_file_creation_is_rechecked_at_confirmation(tmp_path, monkeypatch)
         assert "Файл изменился" in chat_text(screen)
 
 
+@pytest.mark.parametrize("yolo", [False, True])
+async def test_fix_checks_applied_file_and_proposes_one_retry(tmp_path, monkeypatch, yolo):
+    target = tmp_path / "demo.txt"
+    calls = []
+    checks = []
+
+    async def propose(snapshot, instruction):
+        calls.append(instruction)
+        return snapshot.propose(str(len(calls)))
+
+    async def run_check():
+        checks.append(target.read_text(encoding="utf-8"))
+        return (False, "failed example", 1) if len(checks) == 1 else (True, "passed", 0)
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.yolo = yolo
+        screen.session._commands.current_directory = tmp_path
+        screen.session.project_root = tmp_path.resolve()
+        monkeypatch.setattr(screen.session, "run_check", run_check)
+        await send(pilot, "/fix demo.txt Исправь пример", wait=yolo)
+        if not yolo:
+            assert not target.exists() and not checks
+            await pilot.press("2")
+            await pilot.pause()
+            assert screen.query_one(FileReview)
+            assert target.read_text(encoding="utf-8") == "1"
+            await pilot.press("2")
+        assert checks == ["1", "2"]
+        assert "failed example" in calls[1]
+        assert "код 0" in chat_text(screen)
+
+
+async def test_yolo_requires_confirmation_outside_starting_directory(tmp_path, monkeypatch):
+    launch = tmp_path / "project"
+    launch.mkdir()
+
+    async def propose(snapshot, instruction):
+        return snapshot.propose("outside")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.yolo = True
+        screen.session.project_root = launch.resolve()
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, "/edit outside.txt Создай пример", wait=False)
+        assert screen.query_one(FileReview)
+        assert not (tmp_path / "outside.txt").exists()
+        await pilot.press("escape")
+
+
 async def test_file_edit_uses_filename_from_natural_request(tmp_path, monkeypatch):
     instruction = "сделай файл test.txt, со строкой привет мир"
 

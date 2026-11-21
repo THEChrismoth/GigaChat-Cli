@@ -1,6 +1,7 @@
 """Операции рабочей сессии, общие для терминального интерфейса и CLI."""
 
 import asyncio
+import sys
 from contextlib import aclosing
 from pathlib import Path
 from typing import AsyncGenerator, Callable, Coroutine
@@ -19,6 +20,7 @@ class ChatSession:
     def __init__(self) -> None:
         """Начать сессию без активной операции и сохранённой правки."""
         self._commands = CommandUtils()
+        self.project_root = self.directory.resolve()
         self.completion = FileUtils(self._commands)
         self._undo: FileEdit | None = None
         self.task: asyncio.Task[None] | None = None
@@ -77,6 +79,10 @@ class ChatSession:
     async def execute_command(self, command: str) -> tuple[bool, str, int]:
         """Выполнить введённую пользователем команду в рабочей директории."""
         return await self._commands.execute_system_command(command)
+
+    async def run_check(self) -> tuple[bool, str, int]:
+        """Запустить выбранную командой /fix проверку без оболочки."""
+        return await self._commands.execute_system_command((sys.executable, "-m", "pytest", "-q"))
 
     def snapshot(self, path: str) -> FileSnapshot:
         """Прочитать выбранный пользователем файл относительно рабочей директории."""

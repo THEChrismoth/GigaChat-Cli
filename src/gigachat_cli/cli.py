@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="GigaChat CLI. Без аргументов запускается интерактивный интерфейс.",
         epilog=(
             "Примеры:\n"
+            "  gigachat --yolo  (интерактивный режим с автоматическим применением правок внутри проекта)\n"
             '  gigachat -p "Объясни что делает main.py"\n'
             '  git diff | gigachat -p "Напиши commit message"\n'
             '  gigachat -p "Покажи структуру проекта" --output-format json'
