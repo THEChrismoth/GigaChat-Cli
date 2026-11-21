@@ -11,6 +11,7 @@ from gigachat_cli.widgets.message_input import MessageInput
 from gigachat_cli.widgets.file_review import FileReview
 from gigachat_cli.core.command import CommandArgument, split_command_arguments
 from gigachat_cli.core.file_edit import FileEdit, FileEditError
+from gigachat_cli.core.intent import is_read_only_request
 
 if TYPE_CHECKING:
     from gigachat_cli.screens.chat import ChatScreen
@@ -88,7 +89,7 @@ class FileEditHandler:
         """Распознать прямую просьбу о правке или ответ с одним путём."""
         pending, self._pending_instruction = self._pending_instruction, None
         text = text.strip()
-        if text.startswith(("/", "!")):
+        if text.startswith(("/", "!")) or is_read_only_request(text):
             return None
         if pending:
             arguments = _natural_arguments(text)

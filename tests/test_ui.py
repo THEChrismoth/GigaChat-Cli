@@ -633,6 +633,26 @@ async def test_file_advice_stays_a_regular_chat_request(answers, monkeypatch, qu
         assert not pilot.app.screen.query(FileReview)
 
 
+@pytest.mark.parametrize("prompt", [
+    "сделай ревью моего проекта",
+    "сделай ревью без изменения файлов",
+    "Сделай ревью main.py без изменений",
+    "Сделай разбор main.py, не меняй файлы",
+])
+async def test_read_only_requests_reach_chat_in_yolo(tmp_path, answers, monkeypatch, prompt):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "main.py"
+    target.write_bytes(b"print('original')\n")
+    fake = answers([StreamChunk("Замечания по коду", is_final=True)])
+
+    async with Main(yolo=True, persist_sessions=False).run_test() as pilot:
+        await send(pilot, prompt)
+        assert fake.calls == [(prompt, str(tmp_path))]
+        assert not pilot.app.screen.query(FileReview)
+        assert "Замечания по коду" in chat_text(pilot.app.screen)
+    assert target.read_bytes() == b"print('original')\n"
+
+
 @pytest.mark.parametrize("instruction", ["сделай новый файл", "обнови first.txt и second.txt"])
 async def test_file_edit_requires_explicit_path_when_request_is_ambiguous(tmp_path, monkeypatch, instruction):
     async def propose(snapshot, request):

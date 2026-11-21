@@ -94,6 +94,9 @@ def test_detect_language(manager, text, expected):
         ("analyze this project", True),
         ("как назвать проект?", False),
         ("сделай анализ данных", False),
+        ("давай сделаем код-ревью проекта", True),
+        ("что значит ревью?", False),
+        ("ревью.md", False),
     ],
 )
 def test_is_project_analysis_request(text, expected):
@@ -371,6 +374,32 @@ async def test_project_analysis_uses_project_path(manager, fake_giga, project):
     assert os.path.join("pkg", "main.py") in prompt
     assert "lib.js" not in prompt
     assert manager.conversation_history[0].content == "Покажи структуру проекта"
+
+
+@pytest.mark.parametrize("request_text", ["Сделай ревью моего проекта", "Ревью без изменения файлов"])
+async def test_project_review_includes_source_ahead_of_docs(manager, fake_giga, project, request_text):
+    for number in range(6):
+        (project / f"doc{number}.md").write_text("Описание", encoding="utf-8")
+    artifacts = project / "build"
+    artifacts.mkdir()
+    (artifacts / "generated.py").write_text("print('generated')", encoding="utf-8")
+
+    await collect(manager.get_answer_stream(request_text, project_path=str(project)))
+
+    messages = fake_giga.requests[0]
+    assert "по убыванию серьёзности" in messages[0].content
+    assert "print('root main')" in messages[-1].content
+    assert "generated.py" not in messages[-1].content
+    assert manager.conversation_history[0].content == request_text
+
+
+async def test_review_of_named_file_uses_its_content(manager, fake_giga, project):
+    await collect(manager.get_answer_stream("Сделай ревью main.py без изменений", project_path=str(project)))
+
+    messages = fake_giga.requests[0]
+    assert "по убыванию серьёзности" in messages[0].content
+    assert "print('root main')" in messages[-1].content
+    assert "print('pkg main')" not in messages[-1].content
 
 
 async def test_explain_inline_code(manager, fake_giga):
