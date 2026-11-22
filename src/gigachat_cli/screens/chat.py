@@ -35,7 +35,7 @@ from gigachat_cli.widgets.dir import Dir
 
 _RESPONSE_FRAME_INTERVAL = 1 / 30
 _SESSION_COMMANDS = {"/new", "/sessions", "/resume"}
-_UNSAVED_COMMANDS = _SESSION_COMMANDS | {"/exit", "/help", "/model"}
+_UNSAVED_COMMANDS = _SESSION_COMMANDS | {"/exit", "/help", "/model", "/fix"}
 
 
 def _is_saved_prompt(text: str) -> bool:

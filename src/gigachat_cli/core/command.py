@@ -1,6 +1,7 @@
 """Терминальные команды: разбор командной строки, экранирование аргументов и выполнение."""
 
 import asyncio
+import signal
 import shlex
 import os
 from dataclasses import dataclass
@@ -189,7 +190,7 @@ class CommandUtils:
             # stdin закрыт, чтобы интерактивные команды не перехватывали терминал TUI
             if isinstance(command, tuple):
                 process = await asyncio.create_subprocess_exec(
-                    *command, stdin=asyncio.subprocess.DEVNULL,
+                    *command, start_new_session=not IS_WINDOWS, stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                     cwd=self.current_directory,
                 )
@@ -208,6 +209,7 @@ class CommandUtils:
 
                 process = await asyncio.create_subprocess_exec(
                     args[0],
+                    start_new_session=True,
                     *args[1:],
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
@@ -219,7 +221,7 @@ class CommandUtils:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.command_timeout)
             except asyncio.TimeoutError:
                 await self._kill_process(process)
-                return False, f"Превышено время выполнения команды ({self.command_timeout} с)", 1
+                return False, f"Превышено время выполнения команды ({self.command_timeout} с)", 124
             except asyncio.CancelledError:
                 await self._kill_process(process)
                 raise
@@ -238,14 +240,14 @@ class CommandUtils:
             return return_code == 0, output_text, return_code
 
         except FileNotFoundError:
-            return False, f"Команда '{program}' не найдена", 1
+            return False, f"Команда '{program}' не найдена", 127
         except ValueError as e:
             # shlex.split: незакрытая кавычка
             return False, f"Не удалось разобрать команду: {e}", 1
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return False, f"Ошибка выполнения: {e}", 1
+            return False, f"Ошибка выполнения: {e}", 126
 
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
@@ -254,6 +256,13 @@ class CommandUtils:
         Args:
             process: Запущенный процесс
         """
+        if not IS_WINDOWS:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            return
         if process.returncode is None:
             try:
                 if IS_WINDOWS:
@@ -264,8 +273,6 @@ class CommandUtils:
                         stderr=asyncio.subprocess.DEVNULL
                     )
                     await killer.wait()
-                else:
-                    process.kill()
             except ProcessLookupError:
                 pass
             await process.wait()

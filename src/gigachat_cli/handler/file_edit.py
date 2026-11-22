@@ -1,6 +1,7 @@
 """Команды чата для предложения и отката изменения файла."""
 
 import os
+from importlib.util import find_spec
 import re
 from pathlib import PureWindowsPath
 from string import punctuation
@@ -20,12 +21,14 @@ if TYPE_CHECKING:
 _EDIT_REQUEST = re.compile(
     r"^(?:(?:а|пожалуйста|давай(?:те)?|мож(?:ешь|ете|но)|прошу|"
     r"(?:мне\s+)?(?:нужно|надо)|please|(?:can|could) you)[,:\s]+)*"
-    r"(?:созда(?:й(?:те)?|ть|дим)|(?:с\s*)?дела(?:й(?:те)?|ть|ем)|исправ(?:ь(?:те)?|ить)|"
+    r"(?:созда(?:й(?:те)?|ть|дим)|(?P<make>(?:с\s*)?дела(?:й(?:те)?|ть|ем)|make)|исправ(?:ь(?:те)?|ить)|"
     r"добав(?:ь(?:те)?|ить)|запиш(?:и(?:те)?|ать)|отредактируй(?:те)?|отредактировать|"
     r"измени(?:те|ть)?|обнови(?:те|ть)?|перепиш(?:и(?:те)?|ать)|замени(?:те|ть)?|"
-    r"напиш(?:и(?:те)?|ать)|create|make|edit|update|fix|add|write|replace)\b",
+    r"напиш(?:и(?:те)?|ать)|create|edit|update|fix|add|write|replace)\b",
     re.IGNORECASE,
 )
+_READ_ACTION = re.compile(r"\b(?:обзор|разбор|анализ|аудит|отч[её]т|summary|review)\b", re.IGNORECASE)
+_FILE_OBJECT = re.compile(r"(?:(?:мне|новый|новые|a|the|new)\s+)*(?:файл(?:ы|ов)?|files?)\b", re.IGNORECASE)
 _FILE_WORD = re.compile(r"\b(?:файл(?:а|е|ом|ы|ов|у)?|files?)\b", re.IGNORECASE)
 
 
@@ -97,8 +100,16 @@ class FileEditHandler:
                 path = arguments[0].value
                 if path and (arguments[0].quote or _has_file_suffix(path) or "/" in path or "\\" in path):
                     return {path}, pending
-        if not _EDIT_REQUEST.match(text):
+        action = _EDIT_REQUEST.match(text)
+        if not action:
             return None
+        tail = text[action.end():].lstrip(' ,:')
+        if _READ_ACTION.match(tail):
+            return None
+        if action.group("make") and not _FILE_OBJECT.match(tail):
+            arguments = _natural_arguments(tail)
+            if not arguments or not _path_candidates(arguments[:1]):
+                return None
         paths = _path_candidates(_natural_arguments(text))
         if paths or _FILE_WORD.search(text):
             return paths, text
@@ -121,6 +132,8 @@ class FileEditHandler:
                     raise FileEditError("Использование: /undo")
                 edit = screen.session.undo_edit()
             else:
+                if check and find_spec("pytest") is None:
+                    raise FileEditError("Для /fix установите pytest в окружение приложения.")
                 if request is None:
                     path, instruction = _parse_edit_request(user_text)
                 else:
@@ -166,7 +179,7 @@ class FileEditHandler:
             screen.set_operation_status("Подготовка правки")
             edit = await screen.session.propose_edit(snapshot, attempt_instruction)
             diff = edit.diff()
-            if not diff:
+            if not diff and not check:
                 screen.update_chat_display(f"{heading}Содержимое файла не изменилось.")
                 return
 
@@ -175,14 +188,16 @@ class FileEditHandler:
                 and target.is_relative_to(screen.session.project_root)
                 and screen.session.directory.resolve().is_relative_to(screen.session.project_root)
             )
-            if not automatic:
+            if diff and not automatic:
                 if check:
                     screen.update_chat_display(f"{heading}**Правка файла:** {name}\n\nПосле записи: `pytest -q`.")
                 if not await screen.review_file(FileReview(target, diff, undo=False)):
                     screen.update_chat_display(f"{heading}Изменение файла **{name}** отклонено.")
                     return
-            screen.session.apply_edit(edit)
-            result = f"Изменение файла **{name}** применено. /undo — откатить."
+            if diff:
+                screen.session.apply_edit(edit)
+            result = (f"Изменение файла **{name}** применено. /undo — откатить."
+                      if diff else "Содержимое файла не изменилось.")
             screen.update_chat_display(heading + result)
             if not check:
                 return
@@ -192,15 +207,14 @@ class FileEditHandler:
             key = os.getenv("GIGACHAT_API_KEY")
             if key:
                 output = output.replace(key, "[скрыто]")
-            details = output[-4000:]
-            block = _escape_markdown(details)
+            block = _escape_markdown(output)
             heading += f"{result}\n\n**pytest:** код {code}.\n\n{block}\n\n"
             screen.update_chat_display(heading.rstrip())
             if success or code != 1 or attempt == 1:
                 return
             attempt_instruction = (
                 f"{instruction}\n\nПредыдущая правка не прошла pytest. "
-                f"Исправь причину, если она относится к этому файлу. Вывод проверки:\n{details}"
+                f"Исправь причину, если она относится к этому файлу. Pytest завершился с кодом 1."
             )
 
     def _finish_review(

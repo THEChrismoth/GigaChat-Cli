@@ -82,7 +82,7 @@ class ChatSession:
 
     async def run_check(self) -> tuple[bool, str, int]:
         """Запустить выбранную командой /fix проверку без оболочки."""
-        return await self._commands.execute_system_command((sys.executable, "-m", "pytest", "-q"))
+        return await self._commands.execute_system_command((sys.executable, "-P", "-m", "pytest", "-q"))
 
     def snapshot(self, path: str) -> FileSnapshot:
         """Прочитать выбранный пользователем файл относительно рабочей директории."""

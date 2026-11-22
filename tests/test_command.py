@@ -115,6 +115,25 @@ async def test_command_cancellation_kills_process(commands, tmp_path):
     assert not marker.exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Проверка группы процессов POSIX")
+async def test_cancellation_stops_pytest_like_child_process(commands, tmp_path):
+    child = "import time; time.sleep(2); open('finished.txt', 'w').close()"
+    parent = (
+        "import subprocess, sys; "
+        f"process = subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "open('started.txt', 'w').close(); process.wait()"
+    )
+    task = asyncio.create_task(commands.execute_system_command(python_command(parent)))
+    async with asyncio.timeout(5):
+        while not (tmp_path / "started.txt").exists():
+            await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(2.1)
+    assert not (tmp_path / "finished.txt").exists()
+
+
 # --- cd ---
 
 async def test_cd_relative(commands, tmp_path):

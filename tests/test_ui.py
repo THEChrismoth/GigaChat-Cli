@@ -526,7 +526,8 @@ async def test_fix_checks_applied_file_and_proposes_one_retry(tmp_path, monkeypa
             assert target.read_text(encoding="utf-8") == "1"
             await pilot.press("2")
         assert checks == ["1", "2"]
-        assert "failed example" in calls[1]
+        assert "failed example" not in calls[1]
+        assert "кодом 1" in calls[1]
         assert "код 0" in chat_text(screen)
 
 
@@ -638,6 +639,8 @@ async def test_file_advice_stays_a_regular_chat_request(answers, monkeypatch, qu
     "сделай ревью без изменения файлов",
     "Сделай ревью main.py без изменений",
     "Сделай разбор main.py, не меняй файлы",
+    "Сделай обзор main.py",
+    "Сделай, пожалуйста, разбор main.py",
 ])
 async def test_read_only_requests_reach_chat_in_yolo(tmp_path, answers, monkeypatch, prompt):
     monkeypatch.chdir(tmp_path)
@@ -651,6 +654,26 @@ async def test_read_only_requests_reach_chat_in_yolo(tmp_path, answers, monkeypa
         assert not pilot.app.screen.query(FileReview)
         assert "Замечания по коду" in chat_text(pilot.app.screen)
     assert target.read_bytes() == b"print('original')\n"
+
+
+async def test_fix_runs_pytest_without_a_diff(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "main.py"
+    target.write_bytes(b"print(1)\n")
+
+    async def propose(snapshot, instruction):
+        return snapshot.propose(snapshot.text)
+
+    async def check():
+        return True, "pytest completed", 0
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with Main(persist_sessions=False).run_test() as pilot:
+        monkeypatch.setattr(pilot.app.screen.session, "run_check", check)
+        await send(pilot, "/fix main.py проверь файл")
+        assert "pytest completed" in chat_text(pilot.app.screen)
+        assert not pilot.app.screen.query(FileReview)
+    assert target.read_bytes() == b"print(1)\n"
 
 
 @pytest.mark.parametrize("instruction", ["сделай новый файл", "обнови first.txt и second.txt"])
