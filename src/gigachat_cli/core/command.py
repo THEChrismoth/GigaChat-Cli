@@ -160,7 +160,7 @@ class CommandUtils:
         self.command_timeout = command_timeout
         self.file_commands = FILE_COMMANDS
 
-    async def execute_system_command(self, command: str | tuple[str, ...]) -> Tuple[bool, str, int]:
+    async def execute_system_command(self, command: str | tuple[str, ...], *, env: dict[str, str] | None = None) -> Tuple[bool, str, int]:
         r"""Выполнение команды в текущей директории.
 
         На Windows команда выполняется через cmd.exe (доступны dir, type и пути с \),
@@ -169,6 +169,7 @@ class CommandUtils:
 
         Args:
             command: Команда без префикса ! или аргументы для запуска без оболочки.
+            env: Явное окружение дочернего процесса.
 
         Returns:
             Tuple[bool, str, int]: (успех, вывод stdout и stderr, код возврата)
@@ -192,7 +193,7 @@ class CommandUtils:
                 process = await asyncio.create_subprocess_exec(
                     *command, start_new_session=not IS_WINDOWS, stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    cwd=self.current_directory,
+                    cwd=self.current_directory, env=env,
                 )
             elif IS_WINDOWS:
                 process = await asyncio.create_subprocess_shell(
@@ -200,7 +201,7 @@ class CommandUtils:
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=self.current_directory
+                    cwd=self.current_directory, env=env
                 )
             else:
                 args = shlex.split(stripped)
@@ -214,7 +215,7 @@ class CommandUtils:
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=self.current_directory
+                    cwd=self.current_directory, env=env
                 )
 
             try:

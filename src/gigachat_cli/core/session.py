@@ -1,6 +1,7 @@
 """Операции рабочей сессии, общие для терминального интерфейса и CLI."""
 
 import asyncio
+import os
 import sys
 from contextlib import aclosing
 from pathlib import Path
@@ -82,7 +83,8 @@ class ChatSession:
 
     async def run_check(self) -> tuple[bool, str, int]:
         """Запустить выбранную командой /fix проверку без оболочки."""
-        return await self._commands.execute_system_command((sys.executable, "-P", "-m", "pytest", "-q"))
+        env = {name: value for name, value in os.environ.items() if not name.upper().startswith("GIGACHAT_")}
+        return await self._commands.execute_system_command((sys.executable, "-P", "-m", "pytest", "-q"), env=env)
 
     def snapshot(self, path: str) -> FileSnapshot:
         """Прочитать выбранный пользователем файл относительно рабочей директории."""
