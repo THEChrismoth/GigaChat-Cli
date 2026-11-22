@@ -1,4 +1,5 @@
 import json
+import subprocess
 import os
 from types import SimpleNamespace
 
@@ -515,3 +516,13 @@ async def test_load_project_context(manager, project):
     assert sorted(context["file_structure"]) == sorted(["README.md", "main.py", os.path.join("pkg", "main.py")])
     # README.md - конфигурационный файл, поэтому идет первым
     assert next(iter(context["key_files"])) == "README.md"
+
+
+async def test_automatic_context_respects_gitignore(manager, project):
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    (project / ".gitignore").write_text("private.py\n", encoding="utf-8")
+    (project / "private.py").write_text("secret_marker = 42\n", encoding="utf-8")
+    context = await manager.load_project_context(str(project))
+    assert "private.py" not in context["file_structure"]
+    files = await manager.load_multiple_files(["private.py"], str(project))
+    assert "secret_marker" not in files["private.py"]

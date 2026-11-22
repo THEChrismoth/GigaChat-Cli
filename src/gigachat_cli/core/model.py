@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 from contextlib import aclosing
+from pathlib import Path
 from typing import List, Dict, Optional, AsyncGenerator, Any, Tuple
 from dataclasses import dataclass
 
@@ -14,7 +15,7 @@ from langchain_gigachat.chat_models import GigaChat
 from gigachat_cli.core.config import Config
 from gigachat_cli.core.file_edit import FileEdit, FileEditError, FileSnapshot, PythonSyntaxError, prepare_file_edit
 from gigachat_cli.core.intent import is_review_request
-from gigachat_cli.core.review import REVIEW_TOOLS, ReviewWorkspace, iter_project_files
+from gigachat_cli.core.review import REVIEW_TOOLS, ReviewWorkspace, iter_context_files
 
 
 # Значения переменной окружения, отключающие проверку SSL
@@ -369,7 +370,7 @@ class GigaChatManager:
         """
         file_index = {}
         try:
-            for relative_path, file_path in iter_project_files(project_path):
+            for relative_path, file_path in iter_context_files(Path(project_path)):
                 # При совпадении имен приоритет у первого найденного (менее вложенного) файла
                 file_index.setdefault(_normalize_path_key(relative_path), file_path)
                 file_index.setdefault(os.path.basename(relative_path).lower(), file_path)
@@ -461,7 +462,7 @@ class GigaChatManager:
         """
         project_path = project_path or os.getcwd()
         files_content = {}
-
+        self._file_index_path = None
         for file_name in file_names:
             full_path = await asyncio.to_thread(self._find_file_in_project, file_name, project_path)
 
@@ -554,7 +555,7 @@ class GigaChatManager:
 
         try:
             key_candidates = []
-            for relative_path, file_path in iter_project_files(project_path):
+            for relative_path, file_path in iter_context_files(Path(project_path)):
                 context["file_structure"].append(relative_path)
                 file_name = os.path.basename(relative_path)
                 if self._is_key_file(file_name):

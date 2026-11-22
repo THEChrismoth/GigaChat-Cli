@@ -105,6 +105,15 @@ def _git_ignored(root: Path, paths: list[str]) -> set[str]:
     return {os.fsdecode(path) for path in result.stdout.split(b"\0") if path}
 
 
+def iter_context_files(root: Path) -> Iterator[tuple[str, str]]:
+    """Обойти доступные для автоматического контекста файлы."""
+    files = list(iter_project_files(str(root), review=True))
+    ignored = _git_ignored(root, [Path(path).as_posix() for path, _ in files])
+    for relative, path in files:
+        if Path(relative).as_posix() not in ignored:
+            yield relative, path
+
+
 class ReviewWorkspace:
     """Выполнять только операции чтения из контекста текущего проекта."""
 
@@ -112,11 +121,10 @@ class ReviewWorkspace:
         """Собрать индекс путей, доступных для просмотра."""
         self.root = Path(directory).resolve(strict=True)
         candidates = sorted(
-            Path(relative).as_posix() for relative, _ in iter_project_files(str(self.root), review=True)
+            Path(relative).as_posix() for relative, _ in iter_context_files(self.root)
             if Path(relative).suffix.casefold() in _SUFFIXES or Path(relative).name in {"Dockerfile", "Makefile"}
         )
-        ignored = _git_ignored(self.root, candidates)
-        self.paths = [path for path in candidates if path not in ignored]
+        self.paths = candidates
         self._paths = set(self.paths)
         self.read_paths: list[str] = []
 
