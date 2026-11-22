@@ -149,7 +149,7 @@ class FileEditHandler:
                 snapshot = screen.session.snapshot(path)
                 name = _escape_markdown(snapshot.relative_path.as_posix())
                 heading = f"**Вы:** {_escape_markdown(instruction)}\n\n"
-                await self._edit_file(screen, path, name, instruction, heading, check=check)
+                await self._edit_file(screen, path, name, instruction, heading, check=check, explicit=request is None)
                 return True
 
             diff = edit.diff()
@@ -168,7 +168,7 @@ class FileEditHandler:
         return True
 
     async def _edit_file(
-        self, screen: "ChatScreen", path: str, name: str, instruction: str, heading: str, *, check: bool
+        self, screen: "ChatScreen", path: str, name: str, instruction: str, heading: str, *, check: bool, explicit: bool
     ) -> None:
         """Предложить правку и при необходимости повторить её после сбоя pytest."""
         attempt_instruction = instruction
@@ -184,7 +184,7 @@ class FileEditHandler:
                 return
 
             automatic = (
-                screen.yolo and edit.after is not None
+                screen.yolo and explicit and edit.after is not None
                 and target.is_relative_to(screen.session.project_root)
                 and screen.session.directory.resolve().is_relative_to(screen.session.project_root)
             )

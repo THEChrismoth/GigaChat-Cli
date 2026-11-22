@@ -610,14 +610,13 @@ async def test_direct_python_creation_formats_the_diff_and_written_file(tmp_path
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(chat_manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
     async with Main(yolo=yolo, persist_sessions=False).run_test() as pilot:
-        await send(pilot, instruction, wait=yolo)
-        if not yolo:
-            review = pilot.app.screen.query_one(FileReview)
-            assert review.path == target
-            assert '+print("Привет, мир!")\n' in review.diff
-            assert "+)" not in review.diff
-            assert not target.exists()
-            await pilot.press("2")
+        await send(pilot, instruction, wait=False)
+        review = pilot.app.screen.query_one(FileReview)
+        assert review.path == target
+        assert '+print("Привет, мир!")\n' in review.diff
+        assert "+)" not in review.diff
+        assert not target.exists()
+        await pilot.press("2")
         assert target.read_text(encoding="utf-8") == 'print("Привет, мир!")\n'
 
 
