@@ -5,6 +5,19 @@ from types import SimpleNamespace
 from gigachat_cli.core import session
 
 
+async def test_pytest_does_not_inherit_gigachat_key(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIGACHAT_API_KEY", "synthetic-key")
+    (tmp_path / "test_env.py").write_text(
+        "import os\n\ndef test_env():\n    assert 'GIGACHAT_API_KEY' not in os.environ\n",
+        encoding="utf-8",
+    )
+
+    success, output, code = await session.ChatSession().run_check()
+
+    assert success and code == 0, output
+
+
 async def test_session_uses_changed_directory_for_answers_and_edits(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "sub").mkdir()

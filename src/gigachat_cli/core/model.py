@@ -4,6 +4,7 @@ import os
 import asyncio
 import json
 import re
+import subprocess
 from contextlib import aclosing
 from pathlib import Path
 from typing import List, Dict, Optional, AsyncGenerator, Any, Tuple
@@ -294,6 +295,13 @@ class GigaChatManager:
                 yield StreamChunk(content="", is_final=True, error="Модель не вернула итог ревью.")
                 return
             self._last_files_context = workspace.read_paths
+            if not workspace.read_paths:
+                yield StreamChunk(content="", is_final=True, error="Ревью не прочитало ни одного файла проекта.")
+                return
+            if answer.response_metadata.get("finish_reason") not in (None, "stop"):
+                yield StreamChunk(content=answer.content)
+                yield StreamChunk(content="", is_final=True, error="Модель вернула неполное ревью.")
+                return
             self._remember_exchange(prompt, answer.content)
             yield StreamChunk(content=answer.content)
             yield StreamChunk(content="", is_final=True)
@@ -857,8 +865,14 @@ async def get_answer_stream(
     Yields:
         StreamChunk: Части ответа
     """
-    async for chunk in chat_manager.get_answer_stream(prompt, clear_history, project_path):
-        yield chunk
+    try:
+        async with aclosing(chat_manager.get_answer_stream(prompt, clear_history, project_path)) as stream:
+            async for chunk in stream:
+                yield chunk
+    except FileEditError as error:
+        yield StreamChunk(content="", is_final=True, error=str(error))
+    except subprocess.TimeoutExpired:
+        yield StreamChunk(content="", is_final=True, error="Истекло время проверки исключений Git.")
 
 def clear_chat_history() -> str:
     """Очистка истории диалога.

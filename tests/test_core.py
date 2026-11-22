@@ -420,7 +420,9 @@ async def test_review_stops_tool_calls_at_budget(manager, monkeypatch, project):
             if tool_choice == "none":
                 assert len([message for message in messages if message.type == "tool"]) == core._REVIEW_TOOL_LIMIT
                 return AIMessage(content="Итоги просмотренного кода")
-            return AIMessage(content="", tool_calls=[{"name": "list_files", "args": {}, "id": str(len(messages))}])
+            return AIMessage(content="", tool_calls=[{
+                "name": "read_file", "args": {"path": "main.py"}, "id": str(len(messages)),
+            }])
 
         return SimpleNamespace(ainvoke=invoke)
 
@@ -428,6 +430,24 @@ async def test_review_stops_tool_calls_at_budget(manager, monkeypatch, project):
     chunks = await collect(manager.get_answer_stream("/review", project_path=str(project)))
     assert choices == ["auto", "none"]
     assert chunks[0].content == "Итоги просмотренного кода"
+
+
+@pytest.mark.parametrize("read_first", [False, True])
+async def test_incomplete_review_reports_error(manager, monkeypatch, project, read_first):
+    async def invoke(messages):
+        if read_first and messages[-1].type == "human":
+            return AIMessage(content="", tool_calls=[{
+                "name": "read_file", "args": {"path": "main.py"}, "id": "read",
+            }])
+        return AIMessage(content="Часть ответа", response_metadata={"finish_reason": "length" if read_first else "stop"})
+
+    provider = SimpleNamespace(bind_tools=lambda *args, **kwargs: SimpleNamespace(ainvoke=invoke))
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: provider)
+    chunks = await collect(manager.get_answer_stream("/review", project_path=str(project)))
+
+    assert chunks[-1].is_final and chunks[-1].error
+    assert bool(chunks[0].content) is read_first
+    assert manager.conversation_history == []
 
 
 async def test_explain_inline_code(manager, fake_giga):

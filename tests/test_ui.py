@@ -17,6 +17,7 @@ from gigachat_cli.screens.chat import ChatScreen
 from gigachat_cli.widgets.file_review import FileReview
 from gigachat_cli.core.sessions import SessionStore
 from gigachat_cli.core.config import DEFAULT_MODEL, Config
+from gigachat_cli.core.file_edit import FileEditError
 from gigachat_cli.core.model import StreamChunk
 from gigachat_cli.core.command import split_command_arguments
 from gigachat_cli.widgets.file_list import FileList
@@ -529,6 +530,30 @@ async def test_fix_checks_applied_file_and_proposes_one_retry(tmp_path, monkeypa
         assert "failed example" not in calls[1]
         assert "кодом 1" in calls[1]
         assert "код 0" in chat_text(screen)
+
+
+async def test_fix_keeps_applied_result_when_retry_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "example.txt"
+    path.write_text("old", encoding="utf-8")
+
+    async def propose(snapshot, instruction):
+        if snapshot.text == "old":
+            return snapshot.propose("new")
+        raise FileEditError("Сбой второго запроса")
+
+    async def check():
+        return False, "Тест упал", 1
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with Main(yolo=True, persist_sessions=False).run_test() as pilot:
+        screen = pilot.app.screen
+        monkeypatch.setattr(screen.session, "run_check", check)
+        await send(pilot, "/fix example.txt Исправь пример")
+        assert "Сбой второго запроса" in screen.current_exchange
+        assert "Тест упал" in screen.current_exchange
+        assert "/undo" in screen.current_exchange
+    assert path.read_text(encoding="utf-8") == "new"
 
 
 async def test_yolo_requires_confirmation_outside_starting_directory(tmp_path, monkeypatch):
