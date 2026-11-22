@@ -2,6 +2,7 @@
 
 import codecs
 import os
+import subprocess
 from pathlib import Path
 from typing import Iterator
 
@@ -80,16 +81,42 @@ def _relative(value: str) -> str:
     return path.removeprefix("./") if path != "." else ""
 
 
+def _git_ignored(root: Path, paths: list[str]) -> set[str]:
+    """Получить исключения Git одним запросом без запуска оболочки."""
+    markers = (parent / ".git" for parent in (root, *root.parents))
+    if not paths or not any(marker.is_file() or (marker / "HEAD").is_file() for marker in markers):
+        return set()
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"], cwd=root,
+            capture_output=True, timeout=5,
+        )
+    except FileNotFoundError:
+        raise FileEditError("Для проверки исключений при ревью нужен Git.") from None
+    if inside.returncode != 0 or inside.stdout.strip() != b"true":
+        raise FileEditError("Не удалось проверить исключения Git.")
+    result = subprocess.run(
+        ["git", "check-ignore", "--no-index", "-z", "--stdin"], cwd=root,
+        input=b"\0".join(os.fsencode(path) for path in paths) + b"\0",
+        capture_output=True, timeout=5,
+    )
+    if result.returncode not in (0, 1):
+        raise FileEditError("Не удалось проверить исключения Git.")
+    return {os.fsdecode(path) for path in result.stdout.split(b"\0") if path}
+
+
 class ReviewWorkspace:
     """Выполнять только операции чтения из контекста текущего проекта."""
 
     def __init__(self, directory: str) -> None:
         """Собрать индекс путей, доступных для просмотра."""
         self.root = Path(directory).resolve(strict=True)
-        self.paths = sorted(
+        candidates = sorted(
             Path(relative).as_posix() for relative, _ in iter_project_files(str(self.root), review=True)
             if Path(relative).suffix.casefold() in _SUFFIXES or Path(relative).name in {"Dockerfile", "Makefile"}
         )
+        ignored = _git_ignored(self.root, candidates)
+        self.paths = [path for path in candidates if path not in ignored]
         self._paths = set(self.paths)
         self.read_paths: list[str] = []
 

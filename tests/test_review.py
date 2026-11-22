@@ -1,4 +1,20 @@
+import shutil
+import subprocess
+
+import pytest
+
 from gigachat_cli.core.review import ReviewWorkspace
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="Git не установлен")
+def test_gitignored_file_is_unavailable_to_all_review_tools(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("private.txt\n", encoding="utf-8")
+    (tmp_path / "private.txt").write_text("private-marker", encoding="utf-8")
+    workspace = ReviewWorkspace(str(tmp_path))
+    assert workspace.call("list_files", {})["files"] == []
+    assert workspace.call("search_code", {"query": "private-marker"})["matches"] == []
+    assert "error" in workspace.call("read_file", {"path": "private.txt"})
 
 
 def test_review_ignores_artifacts_and_reads_requested_range(tmp_path):
