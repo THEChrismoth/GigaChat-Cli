@@ -157,7 +157,9 @@ class FileEditHandler:
                 screen.update_chat_display("Содержимое файла не изменилось.")
                 return True
         except (FileEditError, OSError) as error:
-            screen.update_chat_display(f"**Ошибка:** {_escape_markdown(str(error))}")
+            message = f"**Ошибка:** {_escape_markdown(str(error))}"
+            previous = screen.current_exchange
+            screen.update_chat_display(f"{previous}\n\n{message}" if previous else message)
             return True
 
         path = edit.before.root / edit.before.relative_path
