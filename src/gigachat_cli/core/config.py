@@ -43,7 +43,7 @@ class Config:
         try:
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return {"model": DEFAULT_MODEL}
 
         if not isinstance(config, dict):
