@@ -1,11 +1,13 @@
 """Терминальные команды: разбор командной строки, экранирование аргументов и выполнение."""
 
 import asyncio
+from contextlib import suppress
 import signal
 import shlex
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import List, Tuple, Optional
 
 
@@ -13,6 +15,7 @@ IS_WINDOWS = os.name == 'nt'
 
 # Правила разбора командной строки: POSIX (shlex) или cmd.exe на Windows
 POSIX_PARSING = not IS_WINDOWS
+_OUTPUT_PREVIEW_BYTES = 8192
 
 
 @dataclass
@@ -143,6 +146,89 @@ def _decode_output(data: bytes) -> str:
         return data.decode('utf-8', errors='replace')
 
 
+class _CommandOutput:
+    """Хранить хвост вывода и дописывать длинный вывод во временный файл."""
+
+    def __init__(self) -> None:
+        """Начать сбор вывода без создания файла."""
+        self._tail = b""
+        self._pending = b""
+        self._key = os.fsencode(os.getenv("GIGACHAT_API_KEY", ""))
+        self._truncated = False
+        self._log = None
+
+    def _append(self, data: bytes, *, final: bool = False) -> None:
+        """Скрыть ключ, включая совпадения на границе двух порций."""
+        if self._key:
+            parts = (self._pending + data).split(self._key)
+            tail = parts.pop()
+            keep = 0 if final else min(len(tail), len(self._key) - 1)
+            end = len(tail) - keep
+            data = b"***".join([*parts, tail[:end]])
+            self._pending = tail[end:]
+
+        combined = self._tail + data
+        if not self._truncated and len(combined) > _OUTPUT_PREVIEW_BYTES:
+            self._truncated = True
+            try:
+                self._log = NamedTemporaryFile(prefix="gigachat-output-", suffix=".log", delete=False)
+                self._log.write(self._tail)
+            except OSError:
+                self.close()
+        if self._log is not None:
+            try:
+                self._log.write(data)
+            except OSError:
+                self.close()
+        # До трёх дополнительных байт нужны для проверки границы UTF-8.
+        self._tail = combined[-(_OUTPUT_PREVIEW_BYTES + 3):]
+
+    async def collect(self, process: asyncio.subprocess.Process) -> int:
+        """Освобождать канал вывода порциями до завершения процесса."""
+        stream = process.stdout
+        assert stream is not None
+        while data := await stream.read(_OUTPUT_PREVIEW_BYTES):
+            self._append(data)
+        return await process.wait()
+
+    def close(self, *, keep: bool = False) -> Path | None:
+        """Закрыть полный лог и вернуть путь к успешно сохранённому файлу."""
+        log, self._log = self._log, None
+        if log is None:
+            return None
+        path = Path(log.name)
+        try:
+            log.close()
+        except OSError:
+            keep = False
+        if keep:
+            return path
+        with suppress(OSError):
+            path.unlink()
+        return None
+
+    def render(self) -> str:
+        """Вернуть ограниченный предпросмотр и путь к полному выводу."""
+        self._append(b"", final=True)
+        path = self.close(keep=True)
+        offset = max(0, len(self._tail) - _OUTPUT_PREVIEW_BYTES)
+        if offset and 0x80 <= self._tail[offset] <= 0xBF:
+            start = end = offset
+            while start and 0x80 <= self._tail[start] <= 0xBF:
+                start -= 1
+            while end < len(self._tail) and 0x80 <= self._tail[end] <= 0xBF:
+                end += 1
+            with suppress(UnicodeDecodeError):
+                self._tail[start:end].decode("utf-8")
+                offset = end
+        preview = _decode_output(self._tail[offset:])
+        if path is not None:
+            return f"Вывод сокращён.\n{preview}\n\nПолный вывод: {path}"
+        if self._truncated:
+            return f"Вывод сокращён. Не удалось сохранить полный вывод.\n{preview}"
+        return preview
+
+
 class CommandUtils:
     """Выполнение терминальных команд в текущей директории чата.
 
@@ -172,7 +258,7 @@ class CommandUtils:
             env: Явное окружение дочернего процесса.
 
         Returns:
-            Tuple[bool, str, int]: (успех, вывод stdout и stderr, код возврата)
+            Tuple[bool, str, int]: Успех, предпросмотр вывода и код возврата.
 
         Raises:
             asyncio.CancelledError: Выполнение отменено (процесс при этом завершается)
@@ -188,57 +274,41 @@ class CommandUtils:
             if stripped == 'cd' or stripped.startswith(('cd ', 'cd\t')):
                 return await self._handle_cd_command(stripped)
 
-            # stdin закрыт, чтобы интерактивные команды не перехватывали терминал TUI
+            # Stdin закрыт, чтобы интерактивные команды не перехватывали терминал TUI.
+            options = dict(
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT, cwd=self.current_directory, env=env,
+            )
+            output = _CommandOutput()
             if isinstance(command, tuple):
                 process = await asyncio.create_subprocess_exec(
-                    *command, start_new_session=not IS_WINDOWS, stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    cwd=self.current_directory, env=env,
+                    *command, start_new_session=not IS_WINDOWS, **options,
                 )
             elif IS_WINDOWS:
-                process = await asyncio.create_subprocess_shell(
-                    stripped,
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=self.current_directory, env=env
-                )
+                process = await asyncio.create_subprocess_shell(stripped, **options)
             else:
                 args = shlex.split(stripped)
                 if not args:
                     return False, "Не удалось разобрать команду", 1
 
-                process = await asyncio.create_subprocess_exec(
-                    args[0],
-                    start_new_session=True,
-                    *args[1:],
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=self.current_directory, env=env
-                )
+                process = await asyncio.create_subprocess_exec(*args, start_new_session=True, **options)
 
+            collector = asyncio.create_task(output.collect(process))
             try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.command_timeout)
+                return_code = await asyncio.wait_for(asyncio.shield(collector), timeout=self.command_timeout)
+                return return_code == 0, output.render(), return_code
             except asyncio.TimeoutError:
                 await self._kill_process(process)
-                return False, f"Превышено время выполнения команды ({self.command_timeout} с)", 124
-            except asyncio.CancelledError:
+                preview = output.render()
+                message = f"Превышено время выполнения команды ({self.command_timeout} с)"
+                return False, f"{message}\n{preview}" if preview else message, 124
+            except (asyncio.CancelledError, OSError):
                 await self._kill_process(process)
                 raise
-            return_code = process.returncode
-
-            output_lines = []
-
-            if stdout:
-                output_lines.append(_decode_output(stdout))
-
-            if stderr:
-                output_lines.append(_decode_output(stderr))
-
-            output_text = "\n".join(output_lines)
-
-            return return_code == 0, output_text, return_code
+            finally:
+                collector.cancel()
+                await asyncio.gather(collector, return_exceptions=True)
+                output.close()
 
         except FileNotFoundError:
             return False, f"Команда '{program}' не найдена", 127

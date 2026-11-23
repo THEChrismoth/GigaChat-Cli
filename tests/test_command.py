@@ -1,5 +1,7 @@
 import asyncio
 import os
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -38,6 +40,29 @@ async def test_command_exit_code_and_stderr(commands):
     assert not success
     assert return_code == 3
     assert "bad" in output
+
+
+@pytest.mark.parametrize("use_argv", [False, True])
+async def test_large_command_keeps_tail_and_saves_redacted_log(commands, tmp_path, monkeypatch, use_argv):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setenv("GIGACHAT_API_KEY", "synthetic-key-for-output-test")
+    code = (
+        "import os, sys; "
+        "sys.stdout.buffer.write(b'begin stdout\\n' + b'\\xd0\\xaf' * 12500); sys.stdout.flush(); "
+        "sys.stderr.buffer.write(os.environ['GIGACHAT_API_KEY'].encode() + b'\\nend stderr\\n'); sys.stderr.flush()"
+    )
+    command = (sys.executable, "-c", code) if use_argv else python_command(code)
+
+    success, output, return_code = await commands.execute_system_command(command)
+
+    assert success and return_code == 0
+    assert "begin stdout" not in output
+    assert "end stderr" in output
+    assert "Я" * 100 in output
+    assert len(output) < 9000
+    path = Path(output.rsplit("Полный вывод: ", 1)[1])
+    assert path.parent == tmp_path
+    assert path.read_bytes() == b"begin stdout\n" + "Я".encode() * 12500 + b"***\nend stderr\n"
 
 
 async def test_unknown_command(commands):
@@ -94,10 +119,13 @@ async def test_command_timeout(tmp_path):
     commands.current_directory = tmp_path
 
     started = time.monotonic()
-    success, output, _ = await commands.execute_system_command(python_command("import time; time.sleep(30)"))
+    success, output, _ = await commands.execute_system_command(
+        python_command("import time; print('started', flush=True); time.sleep(30)"),
+    )
 
     assert not success
     assert "Превышено время выполнения" in output
+    assert "started" in output
     assert time.monotonic() - started < 10
 
 
