@@ -368,6 +368,19 @@ async def test_missing_relative_path_does_not_send_namesake(manager, fake_giga, 
     assert not fake_giga.requests
 
 
+@pytest.mark.parametrize(("name", "content"), [
+    ("sample.json", '[{"answer": 42}]'),
+    ("pyproject.toml", '[project]\nname = "sample"\n'),
+])
+async def test_context_accepts_files_starting_with_bracket(manager, fake_giga, project, name, content):
+    (project / name).write_text(content, encoding="utf-8")
+    chunks = await collect(manager.get_answer_stream(f"Сравни {name} и absent.py", project_path=str(project)))
+
+    assert content in fake_giga.requests[0][-1].content
+    assert "absent.py" in chunks[0].content
+    assert manager.get_conversation_stats()["last_files_context"] == [name]
+
+
 async def test_project_analysis_uses_project_path(manager, fake_giga, project):
     await collect(manager.get_answer_stream("Покажи структуру проекта", project_path=str(project)))
 
@@ -535,16 +548,16 @@ def test_find_file_does_not_match_substring(manager, project):
 
 
 async def test_load_file_content(manager, project, tmp_path):
-    assert await manager.load_file_content(str(project / "main.py")) == "print('root main')\n"
-    assert await manager.load_file_content(str(tmp_path / "missing.py")) is None
+    assert (await manager.load_file_content(str(project / "main.py"))).text == "print('root main')\n"
+    assert (await manager.load_file_content(str(tmp_path / "missing.py"))).error
 
     big = tmp_path / "big.txt"
     big.write_text("x" * 100, encoding="utf-8")
-    assert (await manager.load_file_content(str(big), max_size=10)).startswith("[Файл слишком большой")
+    assert "лимит 10 байт" in (await manager.load_file_content(str(big), max_size=10)).error
 
     binary = tmp_path / "data.bin"
     binary.write_bytes(b"\xff\xfe\x00\x81")
-    assert await manager.load_file_content(str(binary)) == "[Бинарный файл или неподдерживаемая кодировка]"
+    assert (await manager.load_file_content(str(binary))).error == "Бинарный файл или неподдерживаемая кодировка."
 
 
 async def test_load_project_context(manager, project):
@@ -563,4 +576,5 @@ async def test_automatic_context_respects_gitignore(manager, project):
     context = await manager.load_project_context(str(project))
     assert "private.py" not in context["file_structure"]
     files = await manager.load_multiple_files(["private.py"], str(project))
-    assert "secret_marker" not in files["private.py"]
+    assert files["private.py"].text is None
+    assert files["private.py"].error

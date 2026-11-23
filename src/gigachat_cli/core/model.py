@@ -64,6 +64,14 @@ class StreamChunk:
     error: Optional[str] = None   # Текст ошибки (в последней части)
 
 
+@dataclass(frozen=True)
+class FileContent:
+    """Результат чтения файла для контекста запроса."""
+
+    text: str | None = None
+    error: str | None = None
+
+
 def _normalize_path_key(path: str) -> str:
     """Приведение пути к ключу индекса с учётом правил регистра ОС.
 
@@ -431,7 +439,7 @@ class GigaChatManager:
         self._file_index = self._build_file_index(project_path)
         return self._lookup_file(filename)
 
-    async def load_file_content(self, file_path: str, max_size: int = 15000) -> Optional[str]:
+    async def load_file_content(self, file_path: str, max_size: int = 15000) -> FileContent:
         """Чтение текстового файла для передачи в контекст.
 
         Args:
@@ -439,28 +447,27 @@ class GigaChatManager:
             max_size: Максимальный размер файла в байтах
 
         Returns:
-            Optional[str]: Содержимое файла, None если файла нет, или сообщение в [скобках]
-                для слишком большого, бинарного или нечитаемого файла
+            FileContent: Текст файла или причина, по которой он недоступен.
         """
-        def read() -> Optional[str]:
-            if not os.path.exists(file_path):
-                return None
-
-            file_size = os.path.getsize(file_path)
-            if file_size > max_size:
-                return f"[Файл слишком большой: {file_size} байт, лимит: {max_size} байт]"
-
-            with open(file_path, 'r', encoding='utf-8') as f:
-                return f.read()
+        def read() -> FileContent:
+            with open(file_path, "rb") as stream:
+                data = stream.read(max_size + 1)
+            if len(data) > max_size:
+                return FileContent(error=f"Файл слишком большой, лимит {max_size} байт.")
+            if b"\0" in data:
+                return FileContent(error="Бинарный файл или неподдерживаемая кодировка.")
+            return FileContent(text=data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n"))
 
         try:
             return await asyncio.to_thread(read)
+        except FileNotFoundError:
+            return FileContent(error="Файл не найден в проекте.")
         except UnicodeDecodeError:
-            return "[Бинарный файл или неподдерживаемая кодировка]"
-        except Exception as e:
-            return f"[Ошибка чтения файла: {str(e)}]"
+            return FileContent(error="Бинарный файл или неподдерживаемая кодировка.")
+        except OSError:
+            return FileContent(error="Не удалось прочитать файл.")
 
-    async def load_multiple_files(self, file_names: List[str], project_path: Optional[str] = None) -> Dict[str, str]:
+    async def load_multiple_files(self, file_names: List[str], project_path: Optional[str] = None) -> Dict[str, FileContent]:
         """Поиск и чтение нескольких файлов проекта.
 
         Args:
@@ -468,7 +475,7 @@ class GigaChatManager:
             project_path: Корневая директория проекта (по умолчанию - текущая директория процесса)
 
         Returns:
-            Dict[str, str]: Путь относительно проекта -> содержимое или сообщение в [скобках]
+            Dict[str, FileContent]: Результат чтения по относительному пути.
         """
         project_path = project_path or os.getcwd()
         files_content = {}
@@ -481,7 +488,7 @@ class GigaChatManager:
                 relative_path = os.path.relpath(full_path, project_path)
                 files_content[relative_path] = content
             else:
-                files_content[file_name] = f"[Файл не найден в проекте: {file_name}]"
+                files_content[file_name] = FileContent(error="Файл не найден в проекте.")
 
         return files_content
 
@@ -526,14 +533,19 @@ class GigaChatManager:
             context_info = "Содержимое файлов проекта:\n\n"
             loaded_files = []
 
-            # Сообщения в [скобках] (файл не найден, слишком большой и т.д.) в контекст не попадают
+            errors = []
             for file_path, content in files_content.items():
-                if content and not content.startswith('['):
-                    context_info += f"--- {file_path} ---\n{content}\n\n"
+                if content.text is not None:
+                    context_info += f"--- {file_path} ---\n{content.text}\n\n"
                     loaded_files.append(file_path)
+                else:
+                    errors.append(f"{file_path} — {content.error}")
 
             if loaded_files:
                 self._last_files_context = loaded_files
+                if errors:
+                    yield StreamChunk("Недоступные файлы\n\n" + "\n\n".join(errors) + "\n\n")
+                    context_info += "Недоступные файлы\n" + "\n".join(errors)
                 full_prompt = f"{context_info}\n\nЗапрос пользователя: {prompt}"
 
                 system_message = """Ты - опытный разработчик. Тебе предоставлено содержимое файлов проекта.
@@ -543,7 +555,6 @@ class GigaChatManager:
                 async for chunk in self.send_message_stream(full_prompt, system_message, history_prompt=prompt):
                     yield chunk
                 return
-            errors = [content[1:-1] for content in files_content.values() if content and content.startswith('[')]
             yield StreamChunk("", is_final=True, error=" ".join(errors) or "Файлы недоступны для чтения.")
             return
 
