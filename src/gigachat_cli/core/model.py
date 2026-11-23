@@ -65,7 +65,7 @@ class StreamChunk:
 
 
 def _normalize_path_key(path: str) -> str:
-    """Приведение пути к ключу индекса файлов: прямые слеши, нижний регистр, без ./ в начале.
+    """Приведение пути к ключу индекса с учётом правил регистра ОС.
 
     Args:
         path: Путь к файлу
@@ -73,7 +73,7 @@ def _normalize_path_key(path: str) -> str:
     Returns:
         str: Ключ для поиска в индексе
     """
-    key = path.replace('\\', '/').lower()
+    key = os.path.normcase(path).replace(os.sep, '/')
     while key.startswith('./'):
         key = key[2:]
     return key
@@ -374,20 +374,18 @@ class GigaChatManager:
             project_path: Корневая директория проекта
 
         Returns:
-            Dict[str, str]: Относительный путь и имя файла (в виде ключа индекса) -> полный путь
+            Dict[str, str]: Нормализованный относительный путь -> полный путь
         """
         file_index = {}
         try:
             for relative_path, file_path in iter_context_files(Path(project_path)):
-                # При совпадении имен приоритет у первого найденного (менее вложенного) файла
                 file_index.setdefault(_normalize_path_key(relative_path), file_path)
-                file_index.setdefault(os.path.basename(relative_path).lower(), file_path)
         except OSError:
             return {}
         return file_index
 
     def _lookup_file(self, filename: str) -> Optional[str]:
-        """Поиск файла в текущем индексе по относительному пути, затем по имени.
+        """Найти точный путь или первое совпадение для имени без каталога.
 
         Args:
             filename: Имя файла или относительный путь
@@ -395,11 +393,15 @@ class GigaChatManager:
         Returns:
             Optional[str]: Полный путь к существующему файлу или None
         """
-        key = _normalize_path_key(filename)
-        for candidate in (key, os.path.basename(key)):
-            found_path = self._file_index.get(candidate)
-            if found_path and os.path.isfile(found_path):
-                return found_path
+        requested_path = filename.replace('\\', '/')
+        key = _normalize_path_key(requested_path)
+        found_path = self._file_index.get(key)
+        if found_path and os.path.isfile(found_path):
+            return found_path
+        if '/' not in requested_path:
+            for relative_path, found_path in self._file_index.items():
+                if relative_path.rpartition('/')[2] == key and os.path.isfile(found_path):
+                    return found_path
         return None
 
     def _find_file_in_project(self, filename: str, project_path: str) -> Optional[str]:
@@ -501,7 +503,7 @@ class GigaChatManager:
     async def get_contextual_answer_stream(self, prompt: str, project_path: Optional[str] = None) -> AsyncGenerator[StreamChunk, None]:
         """Ответ на запрос с содержимым упомянутых в нем файлов проекта.
 
-        Если ни один файл не найден, запрос отправляется без контекста.
+        Если файлы недоступны, вернуть диагностику чтения.
         В историю сохраняется исходный запрос, без содержимого файлов.
 
         Args:
@@ -518,6 +520,7 @@ class GigaChatManager:
         system_message = "Ты - опытный разработчик. Тебе предоставлено содержимое файлов проекта."
 
         if referenced_files:
+            self._last_files_context = []
             files_content = await self.load_multiple_files(referenced_files, project_path)
 
             context_info = "Содержимое файлов проекта:\n\n"
@@ -540,6 +543,9 @@ class GigaChatManager:
                 async for chunk in self.send_message_stream(full_prompt, system_message, history_prompt=prompt):
                     yield chunk
                 return
+            errors = [content[1:-1] for content in files_content.values() if content and content.startswith('[')]
+            yield StreamChunk("", is_final=True, error=" ".join(errors) or "Файлы недоступны для чтения.")
+            return
 
         async for chunk in self.send_message_stream(prompt, system_message):
             yield chunk

@@ -361,10 +361,11 @@ async def test_file_mention_loads_file_from_project_path(manager, fake_giga, pro
     assert manager.get_conversation_stats()["last_files_context"] == ["main.py"]
 
 
-async def test_missing_file_falls_back_to_plain_request(manager, fake_giga, project):
-    await collect(manager.get_answer_stream("что в nope.py?", project_path=str(project)))
+async def test_missing_relative_path_does_not_send_namesake(manager, fake_giga, project):
+    chunks = await collect(manager.get_answer_stream("что в missing/main.py?", project_path=str(project)))
 
-    assert fake_giga.requests[0][-1].content == "что в nope.py?"
+    assert chunks[-1].is_final and "missing/main.py" in chunks[-1].error
+    assert not fake_giga.requests
 
 
 async def test_project_analysis_uses_project_path(manager, fake_giga, project):
@@ -485,7 +486,7 @@ def test_find_file_by_name_prefers_shallow_file(manager, project):
     assert manager._find_file_in_project("main.py", str(project)) == str(project / "main.py")
 
 
-@pytest.mark.parametrize("name", ["pkg/main.py", "pkg\\main.py", "./pkg/main.py", "PKG/MAIN.PY"])
+@pytest.mark.parametrize("name", ["pkg/main.py", "pkg\\main.py", "./pkg/main.py"])
 def test_find_file_by_relative_path(manager, project, name):
     assert manager._find_file_in_project(name, str(project)) == str(project / "pkg" / "main.py")
 
@@ -493,6 +494,23 @@ def test_find_file_by_relative_path(manager, project, name):
 def test_find_file_ignores_service_and_hidden_files(manager, project):
     assert manager._find_file_in_project("lib.js", str(project)) is None
     assert manager._find_file_in_project(".hidden.py", str(project)) is None
+
+
+def test_find_file_preserves_case_on_posix(manager, project):
+    sibling = project / "Main.py"
+    if sibling.exists():
+        pytest.skip("Файловая система не различает регистр имён")
+    sibling.write_text("another file", encoding="utf-8")
+
+    assert manager._find_file_in_project("main.py", str(project)) == str(project / "main.py")
+    assert manager._find_file_in_project("Main.py", str(project)) == str(sibling)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Обратный слеш допустим в имени файла только на POSIX")
+def test_find_file_keeps_posix_backslash_distinct_from_separator(manager, project):
+    (project / "missing\\main.py").write_text("different file", encoding="utf-8")
+
+    assert manager._find_file_in_project("missing/main.py", str(project)) is None
 
 
 def test_find_file_rebuilds_stale_index(manager, project):
