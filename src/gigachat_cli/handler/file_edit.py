@@ -11,7 +11,7 @@ from gigachat_cli.widgets.message_input import MessageInput
 
 from gigachat_cli.widgets.file_review import FileReview
 from gigachat_cli.core.command import CommandArgument, split_command_arguments
-from gigachat_cli.core.file_edit import FileEdit, FileEditError
+from gigachat_cli.core.file_edit import FileEdit, FileEditError, FileSnapshot
 from gigachat_cli.core.intent import is_read_only_request
 
 if TYPE_CHECKING:
@@ -149,7 +149,7 @@ class FileEditHandler:
                 snapshot = screen.session.snapshot(path)
                 name = _escape_markdown(snapshot.relative_path.as_posix())
                 heading = f"**Вы:** {_escape_markdown(instruction)}\n\n"
-                await self._edit_file(screen, path, name, instruction, heading, check=check, explicit=request is None)
+                await self._edit_file(screen, snapshot, name, instruction, heading, check=check, explicit=request is None)
                 return True
 
             diff = edit.diff()
@@ -170,12 +170,19 @@ class FileEditHandler:
         return True
 
     async def _edit_file(
-        self, screen: "ChatScreen", path: str, name: str, instruction: str, heading: str, *, check: bool, explicit: bool
+        self, screen: "ChatScreen", initial: FileSnapshot, name: str, instruction: str, heading: str, *,
+        check: bool, explicit: bool,
     ) -> None:
         """Предложить правку и при необходимости повторить её после сбоя pytest."""
         attempt_instruction = instruction
+        previous_undo = None
         for attempt in range(2 if check else 1):
-            snapshot = screen.session.snapshot(path)
+            snapshot = initial
+            if attempt:
+                snapshot = screen.session.snapshot(initial.relative_path.as_posix())
+                expected = previous_undo.before if previous_undo is not None else initial
+                if snapshot != expected:
+                    raise FileEditError("Файл изменился между попытками /fix.")
             target = snapshot.root / snapshot.relative_path
             screen.update_chat_display(f"{heading}**Правка файла:** {name}")
             screen.set_operation_status("Подготовка правки")
@@ -197,7 +204,9 @@ class FileEditHandler:
                     screen.update_chat_display(f"{heading}Изменение файла **{name}** отклонено.")
                     return
             if diff:
-                screen.session.apply_edit(edit)
+                screen.session.apply_edit(edit, previous_undo=previous_undo)
+                if check:
+                    previous_undo = screen.session.undo_edit()
             result = (f"Изменение файла **{name}** применено. /undo — откатить."
                       if diff else "Содержимое файла не изменилось.")
             screen.update_chat_display(heading + result)

@@ -498,8 +498,11 @@ async def test_file_creation_is_rechecked_at_confirmation(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("yolo", [False, True])
-async def test_fix_checks_applied_file_and_proposes_one_retry(tmp_path, monkeypatch, yolo):
+@pytest.mark.parametrize("original", [None, b"original\r\n"])
+async def test_fix_retries_and_undo_restores_initial_state(tmp_path, monkeypatch, yolo, original):
     target = tmp_path / "demo.txt"
+    if original is not None:
+        target.write_bytes(original)
     calls = []
     checks = []
 
@@ -520,7 +523,8 @@ async def test_fix_checks_applied_file_and_proposes_one_retry(tmp_path, monkeypa
         monkeypatch.setattr(screen.session, "run_check", run_check)
         await send(pilot, "/fix demo.txt Исправь пример", wait=yolo)
         if not yolo:
-            assert not target.exists() and not checks
+            assert (target.read_bytes() if target.exists() else None) == original
+            assert not checks
             await pilot.press("2")
             await pilot.pause()
             assert screen.query_one(FileReview)
@@ -530,6 +534,11 @@ async def test_fix_checks_applied_file_and_proposes_one_retry(tmp_path, monkeypa
         assert "failed example" not in calls[1]
         assert "кодом 1" in calls[1]
         assert "код 0" in chat_text(screen)
+        await send(pilot, "/undo", wait=False)
+        assert screen.query_one(FileReview)
+        assert target.read_bytes() == b"2"
+        await pilot.press("2")
+        assert (target.read_bytes() if target.exists() else None) == original
 
 
 async def test_fix_keeps_applied_result_when_retry_fails(tmp_path, monkeypatch):
@@ -553,7 +562,37 @@ async def test_fix_keeps_applied_result_when_retry_fails(tmp_path, monkeypatch):
         assert "Сбой второго запроса" in screen.current_exchange
         assert "Тест упал" in screen.current_exchange
         assert "/undo" in screen.current_exchange
-    assert path.read_text(encoding="utf-8") == "new"
+        assert path.read_text(encoding="utf-8") == "new"
+        await send(pilot, "/undo", wait=False)
+        await pilot.press("2")
+        assert path.read_text(encoding="utf-8") == "old"
+
+
+async def test_fix_refuses_retry_after_external_change(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "example.txt"
+    path.write_bytes(b"old")
+    requests = []
+
+    async def propose(snapshot, instruction):
+        requests.append(snapshot.data)
+        return snapshot.propose("new")
+
+    async def check():
+        path.write_bytes(b"external")
+        return False, "Тест упал", 1
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with Main(yolo=True, persist_sessions=False).run_test() as pilot:
+        screen = pilot.app.screen
+        monkeypatch.setattr(screen.session, "run_check", check)
+        await send(pilot, "/fix example.txt Исправь пример")
+        assert requests == [b"old"]
+        assert "Файл изменился между попытками" in chat_text(screen)
+        await send(pilot, "/undo", wait=False)
+        await pilot.press("2")
+        assert "Файл изменился после подготовки" in chat_text(screen)
+    assert path.read_bytes() == b"external"
 
 
 async def test_yolo_requires_confirmation_outside_starting_directory(tmp_path, monkeypatch):

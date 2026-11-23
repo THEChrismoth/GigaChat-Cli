@@ -100,7 +100,14 @@ class ChatSession:
             raise FileEditError("В этом чате нет правки для отката.")
         return self._undo
 
-    def apply_edit(self, edit: FileEdit) -> None:
-        """Применить подтверждённую правку и обновить доступный откат."""
+    def apply_edit(self, edit: FileEdit, *, previous_undo: FileEdit | None = None) -> None:
+        """Применить правку и сохранить исходное состояние при повторе /fix."""
+        if previous_undo is not None and (previous_undo is not self._undo or previous_undo.before != edit.before):
+            raise FileEditError("Файл изменился между попытками /fix.")
         inverse = edit.apply()
-        self._undo = None if edit is self._undo else inverse
+        if edit is self._undo:
+            self._undo = None
+        elif previous_undo is not None:
+            self._undo = FileEdit(inverse.before, previous_undo.after)
+        else:
+            self._undo = inverse
