@@ -18,7 +18,7 @@ class FakeGiga:
         self.error = error
         self.requests = []
 
-    def stream(self, messages):
+    async def astream(self, messages):
         self.requests.append(messages)
         for content in self.chunks:
             yield SimpleNamespace(content=content)

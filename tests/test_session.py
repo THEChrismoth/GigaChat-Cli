@@ -70,7 +70,10 @@ async def test_session_stays_busy_until_cancelled_operation_finishes():
 
 
 async def test_history_is_committed_when_frontend_receives_final_chunk(manager, monkeypatch):
-    fake = SimpleNamespace(stream=lambda messages: iter([SimpleNamespace(content="Ответ")]))
+    async def astream(messages):
+        yield SimpleNamespace(content="Ответ")
+
+    fake = SimpleNamespace(astream=astream)
     monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: fake)
     monkeypatch.setattr("gigachat_cli.core.model.chat_manager", manager)
 

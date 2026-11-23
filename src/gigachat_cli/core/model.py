@@ -230,41 +230,19 @@ class GigaChatManager:
             messages.extend(self.conversation_history)
             messages.append(HumanMessage(content=prompt))
 
-            full_response = ""
-
-            # Клиент GigaChat синхронный: каждая часть ответа читается в пуле потоков,
-            # чтобы не блокировать цикл событий интерфейса
-            loop = asyncio.get_running_loop()
-
-            def sync_stream():
-                """Синхронное чтение ответа с преобразованием ошибок в последнюю часть."""
-                try:
-                    for chunk in giga.stream(messages):
-                        if hasattr(chunk, 'content') and chunk.content:
+            response: list[str] = []
+            try:
+                async with aclosing(giga.astream(messages)) as stream:
+                    async for chunk in stream:
+                        if chunk.content:
+                            response.append(chunk.content)
                             yield StreamChunk(content=chunk.content)
-                    yield StreamChunk(content="", is_final=True)
-                except Exception as e:
-                    yield StreamChunk(content="", is_final=True, error=str(e))
+            except Exception as error:
+                yield StreamChunk(content="", is_final=True, error=self._format_error(f"Ошибка API: {error}"))
+                return
 
-            sync_gen = sync_stream()
-
-            while True:
-                chunk = await loop.run_in_executor(None, next, sync_gen, None)
-                if chunk is None:
-                    break
-
-                if chunk.error:
-                    raise Exception(f"Ошибка API: {chunk.error}")
-
-                if chunk.content:
-                    full_response += chunk.content
-
-                if chunk.is_final:
-                    break
-                yield chunk
-
-            if full_response:
-                self._remember_exchange(history_prompt or prompt, full_response)
+            if response:
+                self._remember_exchange(history_prompt or prompt, "".join(response))
 
             yield StreamChunk(content="", is_final=True)
 
@@ -552,14 +530,16 @@ class GigaChatManager:
                 Анализируй конкретный код из этих файлов и давай точные ответы с примерами.
                 Цитируй конкретные строки кода из предоставленных файлов.
                 Если предлагаешь изменения - покажи конкретный код ДО и ПОСЛЕ."""
-                async for chunk in self.send_message_stream(full_prompt, system_message, history_prompt=prompt):
-                    yield chunk
+                async with aclosing(self.send_message_stream(full_prompt, system_message, history_prompt=prompt)) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
             yield StreamChunk("", is_final=True, error=" ".join(errors) or "Файлы недоступны для чтения.")
             return
 
-        async for chunk in self.send_message_stream(prompt, system_message):
-            yield chunk
+        async with aclosing(self.send_message_stream(prompt, system_message)) as stream:
+            async for chunk in stream:
+                yield chunk
 
     def _collect_project_context(self, project_path: str) -> Dict:
         """Сбор структуры проекта и начала ключевых файлов (синхронно, выполняется в пуле потоков).
@@ -677,8 +657,9 @@ class GigaChatManager:
 
         full_prompt = f"{context_info}\n\nЗапрос: {prompt}"
 
-        async for chunk in self.send_message_stream(full_prompt, system_message, history_prompt=prompt):
-            yield chunk
+        async with aclosing(self.send_message_stream(full_prompt, system_message, history_prompt=prompt)) as stream:
+            async for chunk in stream:
+                yield chunk
 
     @staticmethod
     def _is_project_analysis_request(prompt: str) -> bool:
@@ -730,27 +711,32 @@ class GigaChatManager:
         if code_blocks:
             language = self._detect_language(prompt)
             if any(keyword in lower for keyword in ['объясни', 'explain', 'как работает']):
-                async for chunk in self.explain_code_stream(code_blocks[0], language):
-                    yield chunk
+                async with aclosing(self.explain_code_stream(code_blocks[0], language)) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
             if any(keyword in lower for keyword in ['рефакторинг', 'refactor', 'улучши код']):
-                async for chunk in self.refactor_suggestion_stream(code_blocks[0], language):
-                    yield chunk
+                async with aclosing(self.refactor_suggestion_stream(code_blocks[0], language)) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
 
         if self._extract_file_references(prompt):
-            async for chunk in self.get_contextual_answer_stream(prompt, project_path):
-                yield chunk
+            async with aclosing(self.get_contextual_answer_stream(prompt, project_path)) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         if self._is_project_analysis_request(prompt):
-            async for chunk in self.get_code_analysis_stream(prompt, project_path):
-                yield chunk
+            async with aclosing(self.get_code_analysis_stream(prompt, project_path)) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         system_message = "Ты - полезный AI-ассистент для разработчиков."
-        async for chunk in self.send_message_stream(prompt, system_message):
-            yield chunk
+        async with aclosing(self.send_message_stream(prompt, system_message)) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def explain_code_stream(self, code: str, language: str = "python") -> AsyncGenerator[StreamChunk, None]:
         """Объяснение кода.
@@ -770,8 +756,9 @@ class GigaChatManager:
 
         full_prompt = f"Код для объяснения:\n```{language}\n{code}\n```"
 
-        async for chunk in self.send_message_stream(full_prompt, system_message):
-            yield chunk
+        async with aclosing(self.send_message_stream(full_prompt, system_message)) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def refactor_suggestion_stream(self, code: str, language: str = "python") -> AsyncGenerator[StreamChunk, None]:
         """Предложения по рефакторингу кода.
@@ -793,8 +780,9 @@ class GigaChatManager:
 
         full_prompt = f"Код для рефакторинга:\n```{language}\n{code}\n```"
 
-        async for chunk in self.send_message_stream(full_prompt, system_message):
-            yield chunk
+        async with aclosing(self.send_message_stream(full_prompt, system_message)) as stream:
+            async for chunk in stream:
+                yield chunk
 
     def _extract_code_blocks(self, text: str) -> List[str]:
         """Извлечение блоков кода, в том числе однострочных (```код```).
@@ -917,8 +905,9 @@ async def analyze_project_stream(prompt: str, project_path: str = None) -> Async
     Yields:
         StreamChunk: Части ответа
     """
-    async for chunk in chat_manager.get_code_analysis_stream(prompt, project_path):
-        yield chunk
+    async with aclosing(chat_manager.get_code_analysis_stream(prompt, project_path)) as stream:
+        async for chunk in stream:
+            yield chunk
 
 async def explain_code_stream(code: str, language: str = "python") -> AsyncGenerator[StreamChunk, None]:
     """Объяснение кода.
@@ -930,8 +919,9 @@ async def explain_code_stream(code: str, language: str = "python") -> AsyncGener
     Yields:
         StreamChunk: Части ответа
     """
-    async for chunk in chat_manager.explain_code_stream(code, language):
-        yield chunk
+    async with aclosing(chat_manager.explain_code_stream(code, language)) as stream:
+        async for chunk in stream:
+            yield chunk
 
 async def refactor_code_stream(code: str, language: str = "python") -> AsyncGenerator[StreamChunk, None]:
     """Предложения по рефакторингу кода.
@@ -943,8 +933,9 @@ async def refactor_code_stream(code: str, language: str = "python") -> AsyncGene
     Yields:
         StreamChunk: Части ответа
     """
-    async for chunk in chat_manager.refactor_suggestion_stream(code, language):
-        yield chunk
+    async with aclosing(chat_manager.refactor_suggestion_stream(code, language)) as stream:
+        async for chunk in stream:
+            yield chunk
 
 async def get_contextual_answer_stream(prompt: str, project_path: str = None) -> AsyncGenerator[StreamChunk, None]:
     """Ответ с содержимым упомянутых файлов (см. GigaChatManager.get_contextual_answer_stream).
@@ -956,8 +947,9 @@ async def get_contextual_answer_stream(prompt: str, project_path: str = None) ->
     Yields:
         StreamChunk: Части ответа
     """
-    async for chunk in chat_manager.get_contextual_answer_stream(prompt, project_path):
-        yield chunk
+    async with aclosing(chat_manager.get_contextual_answer_stream(prompt, project_path)) as stream:
+        async for chunk in stream:
+            yield chunk
 
 def get_conversation_stats() -> Dict:
     """Получение статистики текущего диалога.
