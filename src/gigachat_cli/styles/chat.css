@@ -52,7 +52,7 @@
 
 #message_input {
   border: none;
-  border-left: tall $border-blurred;
+  border-left: solid $border-blurred;
   background: $background;
   padding: 1 1;
   height: 3;
@@ -71,7 +71,7 @@
 }
 
 #message_input:focus {
-  border-left: tall $border;
+  border-left: solid $border;
 }
 
 .hidden {
@@ -81,5 +81,5 @@
 #message_input:disabled {
     background: $background;
     color: $foreground;
-    border-left: tall $border-blurred;
+    border-left: solid $border-blurred;
 }
