@@ -4,11 +4,11 @@
 
 [![Версия в PyPI](https://img.shields.io/pypi/v/gigachat-cli)](https://pypi.org/project/gigachat-cli/)
 [![Тесты](https://github.com/THEChrismoth/GigaChat-Cli/actions/workflows/test.yml/badge.svg)](https://github.com/THEChrismoth/GigaChat-Cli/actions/workflows/test.yml)
-[![Лицензия MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/THEChrismoth/GigaChat-Cli/blob/master/LICENSE.md)
+[![Лицензия MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
 [Быстрый старт](#быстрый-старт) · [Работа в терминале](#работа-в-терминале) · [Режим для скриптов](#режим-для-скриптов) · [Разработка](#разработка)
 
-![Чат GigaChat CLI с ответом по коду проекта](https://raw.githubusercontent.com/THEChrismoth/GigaChat-Cli/d1982af462b412c8740d3b227907a7b9cc76c824/docs/images/tui-chat.png)
+![Чат GigaChat CLI с ответом по коду проекта](docs/images/tui-chat.png)
 
 ## Быстрый старт
 
@@ -81,7 +81,7 @@ gigachat
 
 Модель ищет и читает исходники в рабочей папке. Во время ревью доступны только операции чтения, в том числе с `--yolo`. В Git-репозитории для сбора контекста нужен `git` в PATH. При подборе файлов учитываются исключения Git.
 
-![Результат ревью кода с замечаниями и номерами строк](https://raw.githubusercontent.com/THEChrismoth/GigaChat-Cli/d1982af462b412c8740d3b227907a7b9cc76c824/docs/images/tui-review.png)
+![Результат ревью кода с замечаниями и номерами строк](docs/images/tui-review.png)
 
 ### Правки файлов
 
@@ -94,7 +94,7 @@ gigachat
 
 Просмотрите diff прямо в чате. Нажмите `2`, чтобы применить правку, или `1` / `Esc`, чтобы отклонить. Клавиша `Tab` переводит фокус, стрелки и `Enter` позволяют выбрать действие. По умолчанию выделено отклонение.
 
-![Предпросмотр изменения файла и выбор действия в чате](https://raw.githubusercontent.com/THEChrismoth/GigaChat-Cli/d1982af462b412c8740d3b227907a7b9cc76c824/docs/images/tui-edit.png)
+![Предпросмотр изменения файла и выбор действия в чате](docs/images/tui-edit.png)
 
 - `/fix путь задание` предлагает правку и запускает `python -P -m pytest -q` в рабочей папке после применения правки или при пустом diff. Команде нужен pytest в окружении приложения. При коде завершения `1` модель может предложить ещё одну правку к тому же файлу.
 - `/undo` показывает обратный diff последней правки в текущем чате. Для `/fix` он восстанавливает состояние до первой попытки.
@@ -249,6 +249,6 @@ uv run --locked pytest
 uv run --locked ruff check src tests
 ```
 
-Архитектура, стандарты кода и проверки описаны в [руководстве разработчика](https://github.com/THEChrismoth/GigaChat-Cli/blob/d1982af462b412c8740d3b227907a7b9cc76c824/docs/DEVELOPMENT.md). Правила работы с репозиторием находятся в [AGENTS.md](https://github.com/THEChrismoth/GigaChat-Cli/blob/d1982af462b412c8740d3b227907a7b9cc76c824/AGENTS.md).
+Архитектура, стандарты кода и проверки описаны в [руководстве разработчика](docs/DEVELOPMENT.md). Правила работы с репозиторием находятся в [AGENTS.md](AGENTS.md).
 
-[Выпуски на GitHub](https://github.com/THEChrismoth/GigaChat-Cli/releases) · [Сообщить об ошибке](https://github.com/THEChrismoth/GigaChat-Cli/issues) · [Зеркало на GitVerse](https://gitverse.ru/THEChrismoth/GigaChat-Cli) · [Лицензия MIT](https://github.com/THEChrismoth/GigaChat-Cli/blob/master/LICENSE.md)
+[Выпуски на GitHub](https://github.com/THEChrismoth/GigaChat-Cli/releases) · [Сообщить об ошибке](https://github.com/THEChrismoth/GigaChat-Cli/issues) · [Зеркало на GitVerse](https://gitverse.ru/THEChrismoth/GigaChat-Cli) · [Лицензия MIT](LICENSE.md)
