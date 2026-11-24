@@ -1,12 +1,28 @@
-# GigaChat CLI
+<h1 align="center">GigaChat CLI</h1>
 
-Ассистент разработчика в терминале на базе [GigaChat](https://developers.sber.ru/gigachat). Обсуждайте код, проводите ревью проекта и применяйте правки после просмотра diff. Для скриптов есть отдельный режим с выводом в текст, JSON и JSON Lines.
+<p align="center">
+  <strong>Ассистент разработчика в терминале на базе <a href="https://developers.sber.ru/gigachat">GigaChat</a></strong>
+</p>
 
-[![Версия в PyPI](https://img.shields.io/pypi/v/gigachat-cli)](https://pypi.org/project/gigachat-cli/)
-[![Тесты](https://github.com/THEChrismoth/GigaChat-Cli/actions/workflows/test.yml/badge.svg)](https://github.com/THEChrismoth/GigaChat-Cli/actions/workflows/test.yml)
-[![Лицензия MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
+<p align="center">
+  Обсуждайте код, проводите ревью проекта и применяйте правки после просмотра diff.
+  Для скриптов есть отдельный режим с выводом в текст, JSON и JSON Lines.
+</p>
 
-[Быстрый старт](#быстрый-старт) · [Работа в терминале](#работа-в-терминале) · [Режим для скриптов](#режим-для-скриптов) · [Разработка](#разработка)
+<p align="center">
+  <a href="https://pypi.org/project/gigachat-cli/"><img src="https://img.shields.io/pypi/v/gigachat-cli.svg" alt="PyPI"></a>
+  <a href="https://pypi.org/project/gigachat-cli/"><img src="https://img.shields.io/pypi/pyversions/gigachat-cli.svg" alt="Версии Python"></a>
+  <a href="https://github.com/THEChrismoth/GigaChat-Cli/actions/workflows/test.yml"><img src="https://github.com/THEChrismoth/GigaChat-Cli/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/pypi/l/gigachat-cli.svg" alt="Лицензия MIT"></a>
+  <a href="https://gitverse.ru/THEChrismoth/GigaChat-Cli"><img src="https://img.shields.io/badge/GitVerse-mirror-blue.svg" alt="Зеркало на GitVerse"></a>
+</p>
+
+<p align="center">
+  <a href="#быстрый-старт">Быстрый старт</a> ·
+  <a href="#работа-в-терминале">Работа в терминале</a> ·
+  <a href="#режим-для-скриптов">Режим для скриптов</a> ·
+  <a href="#разработка">Разработка</a>
+</p>
 
 ![Чат GigaChat CLI с ответом по коду проекта](docs/images/tui-chat.png)
 
