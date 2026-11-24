@@ -1,0 +1,47 @@
+FileReview {
+    width: 1fr;
+    height: auto;
+    margin: 0 2 1 2;
+    padding: 0 1;
+    background: $background;
+}
+
+#review_path {
+    max-height: 3;
+    text-overflow: ellipsis;
+    text-style: bold;
+}
+
+#diff_scroll {
+    height: auto;
+    max-height: 8;
+    border-left: solid $border-blurred;
+    padding: 0 1;
+}
+
+#diff_scroll:focus {
+    border-left: solid $secondary;
+}
+
+#review_actions {
+    height: auto;
+    margin-top: 1;
+}
+
+#review_actions Button {
+    min-width: 0;
+    width: auto;
+    height: 1;
+    content-align: left middle;
+    text-align: left;
+    padding: 0 1;
+    border: none;
+    background: $background;
+    color: $foreground;
+}
+
+#review_actions Button:focus, #review_actions Button:hover {
+    background: $background;
+    color: $foreground;
+    text-style: bold underline;
+}

@@ -18,12 +18,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     """
     argv = sys.argv[1:] if argv is None else argv
 
-    if argv:
+    if argv and argv != ["--yolo"]:
         from gigachat_cli.cli import main as cli_main
         return cli_main(argv)
 
     from gigachat_cli.main import Main
-    Main().run()
+    app = Main(yolo=True) if argv else Main()
+    app.run()
     return 0
 
 

@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from gigachat_cli.utils.command import CommandUtils
-from gigachat_cli.utils.file import FileUtils, split_path_argument
+from gigachat_cli.core.command import CommandUtils
+from gigachat_cli.core.file import FileUtils, split_path_argument
 from gigachat_cli.widgets.file_list import FileList
 
 
@@ -11,8 +11,10 @@ class FakeInput:
     """Заглушка поля ввода"""
 
     def __init__(self):
-        self.value = ""
-        self.cursor_position = 0
+        self.text = ""
+
+    def move_cursor(self, location):
+        pass
 
     def focus(self):
         pass
@@ -42,7 +44,7 @@ def complete(file_utils, text):
     file_list.update_files(files, command, current_path)
     field = FakeInput()
     file_list.apply_selection(field)
-    return files, field.value
+    return files, field.text
 
 
 windows_only = pytest.mark.skipif(os.name != "nt", reason="Обратный слеш разделяет путь только на Windows")
@@ -108,12 +110,12 @@ def test_directories_listed_first(file_utils):
 @pytest.mark.parametrize(
     ("text", "files", "result"),
     [
-        ("!ls ", ["Scripts", "src", "setup.py"], "!ls Scripts"),
+        ("!ls ", ["Scripts", "src", "setup.py"], "!ls Scripts/"),
         ("!ls se", ["setup.py"], "!ls setup.py"),
         ("!cat src/m", ["main.py", "module.py"], "!cat src/main.py"),
         pytest.param("!cat src\\mo", ["module.py"], "!cat src\\module.py", marks=windows_only),
-        ("!cp setup.py ", ["Scripts", "src", "setup.py"], "!cp setup.py Scripts"),
-        ("!cp  setup.py  sr", ["src"], "!cp  setup.py  src"),
+        ("!cp setup.py ", ["Scripts", "src", "setup.py"], "!cp setup.py Scripts/"),
+        ("!cp  setup.py  sr", ["src"], "!cp  setup.py  src/"),
     ],
 )
 def test_completion(file_utils, text, files, result):
@@ -151,9 +153,9 @@ def test_completion_lists_names_with_spaces(spaced_utils):
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        pytest.param("!ls My\\ ", "!ls My\\ Docs", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
-        pytest.param("!ls 'My ", "!ls 'My Docs'", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
-        pytest.param('!dir "My ', '!dir "My Docs"', marks=windows_only),
+        pytest.param("!ls My\\ ", "!ls My\\ Docs/", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
+        pytest.param("!ls 'My ", "!ls 'My Docs/'", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX")),
+        pytest.param('!dir "My ', '!dir "My Docs/"', marks=windows_only),
     ],
 )
 def test_completion_name_with_spaces(spaced_utils, text, expected):
@@ -218,7 +220,7 @@ def test_completion_home_path(file_utils, tree, monkeypatch):
     files, value = complete(file_utils, "!ls ~/sr")
 
     assert files == ["src"]
-    assert value == "!ls ~/src"
+    assert value == "!ls ~/src/"
 
 
 def test_completion_missing_directory(file_utils):

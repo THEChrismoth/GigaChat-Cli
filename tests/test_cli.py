@@ -5,7 +5,8 @@ import pytest
 
 from gigachat_cli import __main__ as entry
 from gigachat_cli import cli
-from gigachat_cli.utils.core import StreamChunk, chat_manager
+from gigachat_cli.core import session
+from gigachat_cli.core.model import StreamChunk, chat_manager
 
 
 class FakeStdin(io.StringIO):
@@ -32,7 +33,7 @@ def answers(monkeypatch):
             calls.append({"prompt": prompt, "project_path": project_path, "model": chat_manager.get_current_model()})
             for chunk in chunks:
                 yield chunk
-        monkeypatch.setattr(cli, "get_answer_stream", fake)
+        monkeypatch.setattr(session, "get_answer_stream", fake)
         return calls
 
     return install

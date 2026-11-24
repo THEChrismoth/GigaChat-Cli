@@ -5,7 +5,7 @@ import sys
 import tempfile
 
 # Изоляция от реальной домашней директории и переменных окружения пользователя.
-# Выполняется до импорта пакета: при импорте gigachat_cli.utils.core создается
+# Выполняется до импорта пакета: при импорте gigachat_cli.core.model создается
 # конфигурация в ~/.gigachat
 _TEST_HOME = tempfile.mkdtemp(prefix="gigachat-cli-home-")
 os.environ["HOME"] = _TEST_HOME
@@ -15,8 +15,8 @@ for _var in ("GIGACHAT_API_KEY", "GIGACHAT_SSL_VERIFY", "GIGACHAT_CA_BUNDLE_FILE
 
 import pytest  # noqa: E402
 
-from gigachat_cli.utils.config import Config  # noqa: E402
-from gigachat_cli.utils.core import GigaChatManager  # noqa: E402
+from gigachat_cli.core.config import Config  # noqa: E402
+from gigachat_cli.core.model import GigaChatManager  # noqa: E402
 
 
 def python_command(code: str) -> str:
@@ -31,7 +31,7 @@ def python_command(code: str) -> str:
 def config(tmp_path, monkeypatch):
     """Новый экземпляр Config с конфигурацией во временной директории"""
     monkeypatch.setattr(Config, "_instance", None)
-    monkeypatch.setattr("gigachat_cli.utils.config.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gigachat_cli.core.config.Path.home", lambda: tmp_path)
     return Config()
 
 

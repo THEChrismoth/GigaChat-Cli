@@ -1,6 +1,6 @@
 import json
 
-from gigachat_cli.utils.config import DEFAULT_MODEL
+from gigachat_cli.core.config import DEFAULT_MODEL
 
 
 def test_default_config_created(config):
@@ -26,6 +26,14 @@ def test_set_model_keeps_other_keys(config):
 def test_corrupted_config_falls_back_to_default(config):
     config.config_file.write_text("{broken", encoding="utf-8")
     assert config.get_model() == DEFAULT_MODEL
+
+
+def test_invalid_utf8_config_falls_back_to_default(config):
+    corrupted = b"\xff"
+    config.config_file.write_bytes(corrupted)
+
+    assert config.get_model() == DEFAULT_MODEL
+    assert config.config_file.read_bytes() == corrupted
 
 
 def test_non_dict_config_falls_back_to_default(config):

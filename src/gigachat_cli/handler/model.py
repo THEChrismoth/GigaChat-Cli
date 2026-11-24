@@ -1,21 +1,21 @@
 """Обработчик команды /model: выбор модели GigaChat."""
 
-from textual.widgets import Input
+from gigachat_cli.widgets.message_input import MessageInput
 
-from gigachat_cli.utils.config import Config
+from gigachat_cli.core.session import ChatSession
 
 
 class ModelHandler:
     """Обработчик команды /model: показ списка моделей и сохранение выбора."""
 
-    def __init__(self, cfg: Config, screen=None):
+    def __init__(self, session: ChatSession, screen=None):
         """Создание обработчика.
 
         Args:
-            cfg: Конфигурация, в которую сохраняется выбранная модель
+            session: Конфигурация, в которую сохраняется выбранная модель
             screen: Экран чата для отображения результата выбора
         """
-        self.cfg = cfg
+        self.session = session
         self.screen = screen
         # Идентификатор модели в API -> название для пользователя
         self.model_names = {
@@ -24,7 +24,7 @@ class ModelHandler:
             "GigaChat-2-Max": "GigaChat 2 Max",
         }
 
-    async def handle(self, user_text: str, input_field: Input, screen) -> bool:
+    async def handle(self, user_text: str, input_field: MessageInput, screen) -> bool:
         """Обработка команды /model: показ списка моделей для выбора.
 
         Args:
@@ -47,7 +47,7 @@ class ModelHandler:
                 callback=self._on_model_selected
             )
 
-            input_field.value = ""
+            input_field.text = ""
             input_field.focus()
             return True
 
@@ -67,6 +67,6 @@ class ModelHandler:
                 break
 
         if model_key:
-            self.cfg.set_model(model_key)
+            self.session.set_model(model_key)
             self.screen.update_chat_display(f"**Система:** ✅ Выбрана модель: **{selected_item}**")
             self.screen._update_model_display()

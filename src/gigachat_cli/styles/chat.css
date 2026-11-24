@@ -1,44 +1,77 @@
-.banner{
-  color: green;
-  align: center middle;
-  text-align: center;
+#chat_welcome {
+  height: auto;
+  padding: 1 2;
+  color: $foreground;
+  text-style: dim;
+}
+
+#chat_banner {
+  color: $secondary;
+  text-style: bold;
+  text-wrap: nowrap;
+  margin-bottom: 1;
+}
+
+.chat_exchange {
+  margin-bottom: 1;
 }
 
 .status_bar {
   height: 1;
   width: 100%;
   layout: horizontal;
+  padding: 0 1;
+  background: $background;
 }
 
-.dir{
-  color: yellow;
+#chat_title {
+  width: auto;
+  margin-right: 2;
+  color: $secondary;
+  text-style: bold;
+}
+
+.dir {
+  color: $foreground;
+  text-style: dim;
   width: 1fr;
   text-align: left;
   text-wrap: nowrap;
   text-overflow: ellipsis;
 }
 
-.model{
-  color: blue;
+.model {
+  color: $foreground;
   width: auto;
+  max-width: 45%;
+  margin-left: 1;
   text-align: right;
   text-wrap: nowrap;
-}
-
-.typing {
-    color: #888;
-    text-style: italic;
-    height: 1;
-    margin: 0;
-    padding: 0;
-    text-align: left;
+  text-overflow: ellipsis;
 }
 
 #message_input {
-  border: round green;
-  background: transparent !important;
-  outline: none !important;
+  border: none;
+  border-left: solid $border-blurred;
+  background: $background;
+  padding: 1 1;
   height: 3;
+}
+
+#composer_hint {
+  padding: 0 1;
+  color: $foreground;
+  text-style: dim;
+  height: auto;
+}
+
+#command_list, #file_list {
+  padding: 0 1;
+  background: $background;
+}
+
+#message_input:focus {
+  border-left: solid $border;
 }
 
 .hidden {
@@ -46,7 +79,7 @@
 }
 
 #message_input:disabled {
-    background: $surface;
-    color: $text-muted;
-    border: round $background;
+    background: $background;
+    color: $foreground;
+    border-left: solid $border-blurred;
 }

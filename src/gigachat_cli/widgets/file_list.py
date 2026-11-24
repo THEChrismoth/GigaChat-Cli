@@ -1,10 +1,12 @@
 """Выпадающий список автодополнения файлов для терминальных команд."""
 
-from textual.widgets import Static
+from contextlib import nullcontext
+
+from textual.widgets import Static, TextArea
 from textual.reactive import reactive
 from pathlib import Path
 
-from gigachat_cli.utils.file import complete_path_argument
+from gigachat_cli.core.file import complete_path_argument
 
 
 class FileList(Static):
@@ -102,16 +104,25 @@ class FileList(Static):
         return ""
 
     def apply_selection(self, input_field) -> None:
-        """Подстановка выбранного файла в поле ввода с экранированием пробелов и спецсимволов.
+        """Подставить файл или открыть автодополнение содержимого выбранной директории.
 
         Args:
             input_field: Поле ввода для обновления
         """
         selected_file = self.get_selected_file()
         if selected_file and self.current_command:
-            new_text = complete_path_argument(self.current_command, selected_file)
+            is_directory = (Path(self.current_path) / selected_file).is_dir()
+            name = selected_file + "/" if is_directory else selected_file
+            new_text = complete_path_argument(self.current_command, name)
 
-            input_field.value = new_text
-            input_field.cursor_position = len(new_text)
             self.add_class("hidden")
+            # Для файла выбор завершён, а директория должна вызвать новый подбор содержимого.
+            suppress_change = (
+                input_field.prevent(TextArea.Changed)
+                if isinstance(input_field, TextArea) and not is_directory
+                else nullcontext()
+            )
+            with suppress_change:
+                input_field.text = new_text
+            input_field.move_cursor((0, len(new_text)))
             input_field.focus()

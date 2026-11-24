@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 from typing import List, Tuple
 
-from gigachat_cli.utils.command import (
+from gigachat_cli.core.command import (
     FILE_COMMANDS,
     POSIX_PARSING,
     quote_command_argument,

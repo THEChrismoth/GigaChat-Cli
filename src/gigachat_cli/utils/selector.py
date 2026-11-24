@@ -28,7 +28,7 @@ class SelectorManager:
         self.selector_instruction = None
 
     def show_selector(self, items: list, title: str = "Выберите опцию:", callback=None) -> None:
-        """Показ списка выбора вместо содержимого чата.
+        """Показ списка выбора в текущем обмене.
 
         Args:
             items: Элементы для выбора
@@ -41,12 +41,9 @@ class SelectorManager:
         self.selector_title = title
         self.selector_callback = callback
 
-        self.screen.clear_chat_display()
-
         # Пока открыт список, ввод сообщений заблокирован
         message_input = self.screen.query_one("#message_input")
         message_input.disabled = True
-        message_input.placeholder = ""
         message_input.blur()
 
         self.selector_widget = SelectorWidget()
@@ -94,7 +91,6 @@ class SelectorManager:
 
             message_input = self.screen.query_one("#message_input")
             message_input.disabled = False
-            message_input.placeholder = "Введите сообщение... (Нажмите Enter для отправки)"
             message_input.focus()
 
             if self.selector_callback:
@@ -113,7 +109,6 @@ class SelectorManager:
 
             message_input = self.screen.query_one("#message_input")
             message_input.disabled = False
-            message_input.placeholder = "Введите сообщение... (Нажмите Enter для отправки)"
             message_input.focus()
 
             self.selector_active = False

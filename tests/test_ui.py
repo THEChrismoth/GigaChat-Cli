@@ -1,16 +1,27 @@
 import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from textual.app import App
-from textual.widgets import Input, Markdown
+from textual import events
+from textual.widgets import Markdown
+
+from gigachat_cli.widgets.message_input import MessageInput
 
 from conftest import python_command
 from gigachat_cli.main import Main
-from gigachat_cli.screens import chat
+from gigachat_cli.core import session
 from gigachat_cli.screens.chat import ChatScreen
-from gigachat_cli.screens.start import MenuApp
-from gigachat_cli.utils.config import DEFAULT_MODEL, Config
-from gigachat_cli.utils.core import StreamChunk
+from gigachat_cli.widgets.file_review import FileReview
+from gigachat_cli.core.sessions import SessionStore
+from gigachat_cli.core.config import DEFAULT_MODEL, Config
+from gigachat_cli.core.file_edit import FileEditError
+from gigachat_cli.core.model import StreamChunk
+from gigachat_cli.core.command import split_command_arguments
+from gigachat_cli.widgets.file_list import FileList
+from gigachat_cli.core.model import chat_manager
 
 
 class ChatApp(App):
@@ -40,7 +51,7 @@ class FakeAnswers:
 def answers(monkeypatch):
     def install(chunks, hang=False):
         fake = FakeAnswers(chunks, hang)
-        monkeypatch.setattr(chat, "get_answer_stream", fake)
+        monkeypatch.setattr(session, "get_answer_stream", fake)
         return fake
     return install
 
@@ -53,16 +64,16 @@ def default_model():
 
 
 def chat_text(screen) -> str:
-    return screen.query_one("#chat_display", Markdown).source
+    return "\n\n".join(block.source for block in screen.query(".chat_exchange").results(Markdown))
 
 
-async def send(pilot, text: str) -> None:
+async def send(pilot, text: str, *, wait: bool = True) -> None:
     """Ввод сообщения и ожидание окончания его обработки"""
     screen = pilot.app.screen
-    screen.query_one("#message_input", Input).value = text
+    screen.query_one("#message_input", MessageInput).text = text
     await pilot.press("enter")
-    task = screen.current_stream_task
-    if task is not None:
+    task = screen.session.task
+    if wait and task is not None:
         await asyncio.wait_for(asyncio.shield(task), timeout=30)
     await pilot.pause()
 
@@ -76,10 +87,10 @@ async def test_streamed_answer_is_displayed(answers):
 
         assert "**Вы:** Здравствуй" in chat_text(screen)
         assert "Привет!" in chat_text(screen)
-        assert fake.calls == [("Здравствуй", str(screen.command_utils.get_current_directory()))]
-        assert screen.query_one("#message_input", Input).value == ""
-        assert not screen.is_processing_stream
-        assert screen.current_typing_indicator is None
+        assert fake.calls == [("Здравствуй", str(screen.session.directory))]
+        assert screen.query_one("#message_input", MessageInput).text == ""
+        assert not screen.session.busy
+        assert "F3/F4 история" in str(screen.query_one("#composer_hint").render())
 
 
 async def test_api_error_is_displayed(answers):
@@ -89,6 +100,103 @@ async def test_api_error_is_displayed(answers):
         await send(pilot, "Вопрос")
 
         assert "**Ошибка:** GIGACHAT_API_KEY не установен" in chat_text(pilot.app.screen)
+
+
+async def test_status_follows_response_and_resets_after_cancellation(monkeypatch):
+    first_chunk = asyncio.Event()
+
+    async def answer(prompt, project_path):
+        await first_chunk.wait()
+        yield StreamChunk("Часть ответа")
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(session, "get_answer_stream", answer)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        hint = screen.query_one("#composer_hint")
+        screen.query_one(MessageInput).text = "Долгий запрос"
+        await pilot.press("enter")
+        assert "Ожидание ответа" in str(hint.render())
+        first_chunk.set()
+        await pilot.pause()
+        assert "Генерация ответа" in str(hint.render())
+        await pilot.press("escape")
+        await pilot.pause()
+        assert "F3/F4 история" in str(hint.render())
+        assert "Часть ответа" in chat_text(screen)
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40), (60, 24)])
+async def test_stream_respects_scroll_position_and_focus(answers, size):
+    answers([
+        StreamChunk("\n\n".join(f"Строка {i}" for i in range(start, start + 10)) + "\n\n")
+        for start in range(0, 80, 10)
+    ] + [StreamChunk("", is_final=True)])
+    async with ChatApp().run_test(size=size) as pilot:
+        await send(pilot, "Длинный ответ")
+        screen = pilot.app.screen
+        container = screen.query_one("#chat_container")
+        assert screen.query_one("#chat_welcome").has_class("hidden")
+        assert container.size.height >= 15
+        assert container.is_vertical_scroll_end
+        container.scroll_home(animate=False)
+        container.focus()
+        await pilot.pause()
+        assert pilot.app.focused is container
+        screen.update_chat_display(screen.current_exchange + "\n\nПродолжение")
+        await pilot.pause()
+        assert container.scroll_y == 0
+        container.scroll_end(animate=False)
+        await pilot.pause()
+        screen.update_chat_display(screen.current_exchange + "\n\nЕщё продолжение")
+        await pilot.pause()
+        assert container.is_vertical_scroll_end
+
+
+async def test_history_survives_messages_help_and_model_selection(answers):
+    answers([StreamChunk("Ответ", is_final=True)])
+    async with ChatApp().run_test() as pilot:
+        for index in range(10):
+            await send(pilot, f"Вопрос номер {index}")
+        await send(pilot, "/help")
+        await send(pilot, "/model")
+        await pilot.press("escape")
+        await pilot.pause()
+        text = chat_text(pilot.app.screen)
+        for index in range(10):
+            assert text.count(f"**Вы:** Вопрос номер {index}") == 1
+        assert text.count("**GigaChat:**") == 10
+        assert "Доступные команды" in text
+        assert "Выбор отменен" in text
+
+
+async def test_fast_stream_batches_fragments_without_rebuilding_history(answers, monkeypatch):
+    answers([StreamChunk("\n\n".join(f"Строка {i}" for i in range(30)), is_final=True)])
+    async with ChatApp().run_test(size=(80, 24)) as pilot:
+        screen = pilot.app.screen
+        await send(pilot, "Первый вопрос")
+        history = screen.query_one("#chat_container")
+        first = screen.query_one(".chat_exchange", Markdown)
+        finished_blocks = tuple(first.children)
+        assert history.is_vertical_scroll_end
+
+        updated = []
+        update = Markdown.update
+
+        def track(widget, source):
+            updated.append(widget)
+            return update(widget, source)
+
+        monkeypatch.setattr(Markdown, "update", track)
+        chunks = [StreamChunk(str(i) + " ") for i in range(180)]
+        answers(chunks + [StreamChunk("", is_final=True)])
+        await send(pilot, "Второй вопрос")
+
+        assert first not in updated
+        assert tuple(first.children) == finished_blocks
+        assert " ".join(str(i) for i in range(180)) in chat_text(screen)
+        assert 0 < len(updated) < len(chunks) // 2
+        assert history.is_vertical_scroll_end
 
 
 async def test_partial_answer_kept_on_error(answers):
@@ -107,18 +215,104 @@ async def test_escape_cancels_request(answers):
 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.query_one("#message_input", Input).value = "Долгий вопрос"
+        screen.query_one("#message_input", MessageInput).text = "Долгий вопрос"
         await pilot.press("enter")
         await pilot.pause(0.2)
-        task = screen.current_stream_task
-        assert screen.is_processing_stream
+        task = screen.session.task
+        assert screen.session.busy
 
         await pilot.press("escape")
         await pilot.pause()
 
         assert task.done()
-        assert not screen.is_processing_stream
+        assert not screen.session.busy
         assert "Запрос отменен пользователем" in chat_text(screen)
+        assert "думаю..." in chat_text(screen)
+
+
+async def test_cancellation_keeps_draft_and_allows_next_request(answers):
+    answers([StreamChunk("Частичный ответ")], hang=True)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        input_field = screen.query_one("#message_input", MessageInput)
+        input_field.text = "Первый запрос"
+        await pilot.press("enter")
+        await pilot.pause()
+        input_field.text = "/he"
+        await pilot.pause()
+        task = screen.session.task
+        await pilot.press("ctrl+c")
+        await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert input_field.text == "/he"
+        assert "Частичный ответ" in chat_text(screen)
+        assert not screen.session.busy
+        answers([StreamChunk("Следующий ответ", is_final=True)])
+        await send(pilot, "Следующий запрос")
+        assert "Частичный ответ" in chat_text(screen)
+        assert "Следующий ответ" in chat_text(screen)
+
+
+async def test_terminal_command_keeps_draft(answers, monkeypatch):
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def execute(command):
+        started.set()
+        await finish.wait()
+        return True, "готово", 0
+
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        monkeypatch.setattr(screen.session, "execute_command", execute)
+        input_field = screen.query_one("#message_input", MessageInput)
+        input_field.text = "!test"
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert input_field.text == ""
+        input_field.text = "Черновик"
+        task = screen.session.task
+        finish.set()
+        await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert input_field.text == "Черновик"
+
+
+async def test_cancel_waits_for_cleanup_before_next_request(answers):
+    cancelling = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def stream(prompt, **kwargs):
+        calls.append(prompt)
+        yield StreamChunk("Начало")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        original = session.get_answer_stream
+        session.get_answer_stream = stream
+        try:
+            screen.query_one(MessageInput).text = "Первый"
+            await pilot.press("enter")
+            await pilot.pause()
+            task = screen.session.task
+            await pilot.press("escape")
+            await asyncio.wait_for(cancelling.wait(), timeout=5)
+            await pilot.press("escape")
+            assert not task.done()
+            screen.query_one(MessageInput).text = "Второй"
+            await pilot.press("enter")
+            assert calls == ["Первый"]
+            assert screen.session.busy
+            release.set()
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            assert not screen.session.busy
+        finally:
+            release.set()
+            session.get_answer_stream = original
 
 
 async def test_second_enter_ignored_while_processing(answers):
@@ -126,11 +320,11 @@ async def test_second_enter_ignored_while_processing(answers):
 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        input_field = screen.query_one("#message_input", Input)
-        input_field.value = "первый"
+        input_field = screen.query_one("#message_input", MessageInput)
+        input_field.text = "первый"
         await pilot.press("enter")
         await pilot.pause(0.2)
-        input_field.value = "второй"
+        input_field.text = "второй"
         await pilot.press("enter")
         await pilot.pause(0.2)
 
@@ -157,12 +351,462 @@ async def test_terminal_cd_updates_project_path(answers, tmp_path):
 
     async with ChatApp().run_test() as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = tmp_path
+        screen.session._commands.current_directory = tmp_path
 
-        await send(pilot, "!cd sub")
+        await send(pilot, "!cd sub/")
         await send(pilot, "вопрос")
 
         assert fake.calls == [("вопрос", str((tmp_path / "sub").resolve()))]
+
+
+@pytest.mark.parametrize("command", ["!cat ", "!cd "])
+async def test_directory_selection_opens_children_until_file(answers, tmp_path, command):
+    fake = answers([])
+    nested = tmp_path / "My Docs" / "Вложенная папка"
+    nested.mkdir(parents=True)
+    (nested / "notes.txt").write_text("notes", encoding="utf-8")
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        field = screen.query_one(MessageInput)
+        files = screen.query_one(FileList)
+        field.text = command
+        await pilot.pause()
+        for expected in ["My Docs", "Вложенная папка", "notes.txt"]:
+            assert not files.has_class("hidden")
+            assert files.files == [expected]
+            await pilot.press("enter")
+            await pilot.pause()
+            assert not screen.session.busy
+        assert files.has_class("hidden")
+        assert split_command_arguments(field.text)[-1].value == "My Docs/Вложенная папка/notes.txt"
+        assert fake.calls == []
+
+
+async def test_cd_selected_directory_can_be_executed_with_escape(answers, tmp_path):
+    (tmp_path / "folder").mkdir()
+    (tmp_path / "folder" / "child").mkdir()
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        screen.query_one(MessageInput).text = "!cd "
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not screen.query_one(FileList).has_class("hidden")
+        await pilot.press("escape")
+        await pilot.press("enter")
+        task = screen.session.task
+        if task:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert screen.session.directory == (tmp_path / "folder").resolve()
+
+
+async def test_empty_directory_selection_closes_completion(answers, tmp_path):
+    (tmp_path / "empty").mkdir()
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        field = screen.query_one(MessageInput)
+        field.text = "!cd "
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert field.text == "!cd empty/"
+        assert screen.query_one(FileList).has_class("hidden")
+        assert screen.session.directory == tmp_path
+        await pilot.press("enter")
+        task = screen.session.task
+        if task:
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert screen.session.directory == (tmp_path / "empty").resolve()
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40), (60, 24)])
+async def test_file_edit_review_confirm_and_undo(tmp_path, monkeypatch, size):
+    target = tmp_path / "Мои заметки [demo].txt"
+    target.write_bytes(b"original\n")
+
+    async def propose(snapshot, instruction):
+        assert snapshot.relative_path.name == target.name
+        assert instruction == "Обнови текст"
+        return snapshot.propose("[bold] replacement\n")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test(size=size) as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        command = f'/edit "{target.name}" Обнови текст'
+        await send(pilot, command, wait=False)
+        assert pilot.app.screen is screen
+        review = screen.query_one(FileReview)
+        assert review.parent.id == "chat_container"
+        assert screen.query_one(MessageInput).disabled
+        assert not screen.query_one(MessageInput).display
+        assert review.path == target
+        assert "+[bold] replacement" in review.diff
+        assert pilot.app.focused.id == "reject_change"
+        assert str(pilot.app.focused.label).startswith("› 1.")
+        assert target.read_bytes() == b"original\n"
+        assert "replacement" in pilot.app.export_screenshot()
+        await pilot.press("enter")
+        assert pilot.app.screen is screen
+        assert target.read_bytes() == b"original\n"
+        assert not screen.query(FileReview)
+        assert pilot.app.focused is screen.query_one(MessageInput)
+        assert screen.query_one(MessageInput).display
+
+        await send(pilot, command, wait=False)
+        await pilot.press("down")
+        assert str(pilot.app.focused.label).startswith("› 2.")
+        assert target.read_bytes() == b"original\n"
+        await pilot.press("enter")
+        assert pilot.app.screen is screen
+        assert target.read_bytes() == b"[bold] replacement\n"
+        assert "применено" in chat_text(screen)
+
+        await send(pilot, "/undo", wait=False)
+        assert screen.query_one(FileReview).parent.id == "chat_container"
+        await pilot.press("escape")
+        assert pilot.app.screen is screen
+        assert target.read_bytes() == b"[bold] replacement\n"
+        await send(pilot, "/undo", wait=False)
+        await pilot.press("2")
+        assert target.read_bytes() == b"original\n"
+        assert "отменено" in chat_text(screen)
+
+
+async def test_file_creation_is_rechecked_at_confirmation(tmp_path, monkeypatch):
+    target = tmp_path / "new.txt"
+
+    async def propose(snapshot, instruction):
+        assert snapshot.data is None
+        return snapshot.propose("proposal\n")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, "/edit new.txt Добавь текст", wait=False)
+        assert screen.query_one(FileReview).parent.id == "chat_container"
+        assert not target.exists()
+        target.write_bytes(b"external")
+        await pilot.click("#apply_change")
+        assert pilot.app.screen is screen
+        assert target.read_bytes() == b"external"
+        assert "Файл изменился" in chat_text(screen)
+
+
+@pytest.mark.parametrize("yolo", [False, True])
+@pytest.mark.parametrize("original", [None, b"original\r\n"])
+async def test_fix_retries_and_undo_restores_initial_state(tmp_path, monkeypatch, yolo, original):
+    target = tmp_path / "demo.txt"
+    if original is not None:
+        target.write_bytes(original)
+    calls = []
+    checks = []
+
+    async def propose(snapshot, instruction):
+        calls.append(instruction)
+        return snapshot.propose(str(len(calls)))
+
+    async def run_check():
+        checks.append(target.read_text(encoding="utf-8"))
+        return (False, "failed example", 1) if len(checks) == 1 else (True, "passed", 0)
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.yolo = yolo
+        screen.session._commands.current_directory = tmp_path
+        screen.session.project_root = tmp_path.resolve()
+        monkeypatch.setattr(screen.session, "run_check", run_check)
+        await send(pilot, "/fix demo.txt Исправь пример", wait=yolo)
+        if not yolo:
+            assert (target.read_bytes() if target.exists() else None) == original
+            assert not checks
+            await pilot.press("2")
+            await pilot.pause()
+            assert screen.query_one(FileReview)
+            assert target.read_text(encoding="utf-8") == "1"
+            await pilot.press("2")
+        assert checks == ["1", "2"]
+        assert "failed example" not in calls[1]
+        assert "кодом 1" in calls[1]
+        assert "код 0" in chat_text(screen)
+        await send(pilot, "/undo", wait=False)
+        assert screen.query_one(FileReview)
+        assert target.read_bytes() == b"2"
+        await pilot.press("2")
+        assert (target.read_bytes() if target.exists() else None) == original
+
+
+async def test_fix_keeps_applied_result_when_retry_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "example.txt"
+    path.write_text("old", encoding="utf-8")
+
+    async def propose(snapshot, instruction):
+        if snapshot.text == "old":
+            return snapshot.propose("new")
+        raise FileEditError("Сбой второго запроса")
+
+    async def check():
+        return False, "Тест упал", 1
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with Main(yolo=True, persist_sessions=False).run_test() as pilot:
+        screen = pilot.app.screen
+        monkeypatch.setattr(screen.session, "run_check", check)
+        await send(pilot, "/fix example.txt Исправь пример")
+        assert "Сбой второго запроса" in screen.current_exchange
+        assert "Тест упал" in screen.current_exchange
+        assert "/undo" in screen.current_exchange
+        assert path.read_text(encoding="utf-8") == "new"
+        await send(pilot, "/undo", wait=False)
+        await pilot.press("2")
+        assert path.read_text(encoding="utf-8") == "old"
+
+
+async def test_fix_refuses_retry_after_external_change(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "example.txt"
+    path.write_bytes(b"old")
+    requests = []
+
+    async def propose(snapshot, instruction):
+        requests.append(snapshot.data)
+        return snapshot.propose("new")
+
+    async def check():
+        path.write_bytes(b"external")
+        return False, "Тест упал", 1
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with Main(yolo=True, persist_sessions=False).run_test() as pilot:
+        screen = pilot.app.screen
+        monkeypatch.setattr(screen.session, "run_check", check)
+        await send(pilot, "/fix example.txt Исправь пример")
+        assert requests == [b"old"]
+        assert "Файл изменился между попытками" in chat_text(screen)
+        await send(pilot, "/undo", wait=False)
+        await pilot.press("2")
+        assert "Файл изменился после подготовки" in chat_text(screen)
+    assert path.read_bytes() == b"external"
+
+
+async def test_yolo_requires_confirmation_outside_starting_directory(tmp_path, monkeypatch):
+    launch = tmp_path / "project"
+    launch.mkdir()
+
+    async def propose(snapshot, instruction):
+        return snapshot.propose("outside")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.yolo = True
+        screen.session.project_root = launch.resolve()
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, "/edit outside.txt Создай пример", wait=False)
+        assert screen.query_one(FileReview)
+        assert not (tmp_path / "outside.txt").exists()
+        await pilot.press("escape")
+
+
+async def test_file_edit_uses_filename_from_natural_request(tmp_path, monkeypatch):
+    instruction = "сделай файл test.txt, со строкой привет мир"
+
+    async def propose(snapshot, request):
+        assert snapshot.relative_path.name == "test.txt"
+        assert request == instruction
+        return snapshot.propose("привет мир\n")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, "/edit " + instruction, wait=False)
+        assert screen.query_one(FileReview).path == tmp_path / "test.txt"
+        await pilot.press("tab", "enter")
+        assert (tmp_path / "test.txt").read_text(encoding="utf-8") == "привет мир\n"
+        assert not (tmp_path / "сделай").exists()
+
+
+@pytest.mark.parametrize("clarify", [False, True])
+async def test_direct_chat_request_opens_review_for_the_selected_path(tmp_path, monkeypatch, clarify):
+    prompt = "Создай файл с приветствием" if clarify else "Создай файл «мои заметки.txt» с приветствием"
+    calls = []
+
+    async def propose(snapshot, instruction):
+        calls.append((snapshot.relative_path.name, instruction))
+        return snapshot.propose("Привет\n")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, prompt, wait=clarify)
+        if clarify:
+            assert "Какой файл" in chat_text(screen)
+            assert not calls
+            await send(pilot, '"мои заметки.txt"', wait=False)
+        assert calls == [("мои заметки.txt", prompt)]
+        assert screen.query_one(FileReview).path == tmp_path / "мои заметки.txt"
+        assert not list(tmp_path.iterdir())
+        await pilot.press("2")
+        assert (tmp_path / "мои заметки.txt").read_text(encoding="utf-8") == "Привет\n"
+
+
+@pytest.mark.parametrize(("instruction", "yolo"), [
+    ("с делать файл test.py с программой привет мир", False),
+    ("Давай, пожалуйста, сделаем файл `test.py`, который выводит привет мир", True),
+])
+async def test_direct_python_creation_formats_the_diff_and_written_file(tmp_path, monkeypatch, instruction, yolo):
+    target = tmp_path / "test.py"
+
+    async def invoke(messages):
+        request = json.loads(messages[-1].content)
+        assert request["path"] == target.name
+        assert request["instruction"] == instruction
+        return SimpleNamespace(content='```python\nprint("Привет, мир!"\n)\n```', response_metadata={})
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(chat_manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
+    async with Main(yolo=yolo, persist_sessions=False).run_test() as pilot:
+        await send(pilot, instruction, wait=False)
+        review = pilot.app.screen.query_one(FileReview)
+        assert review.path == target
+        assert '+print("Привет, мир!")\n' in review.diff
+        assert "+)" not in review.diff
+        assert not target.exists()
+        await pilot.press("2")
+        assert target.read_text(encoding="utf-8") == 'print("Привет, мир!")\n'
+
+
+@pytest.mark.parametrize("question", ["Как улучшить README.md?", "А можно ли сделать файл test.py короче?"])
+async def test_file_advice_stays_a_regular_chat_request(answers, monkeypatch, question):
+    async def unexpected_edit(snapshot, instruction):
+        pytest.fail("Вопрос о файле попал в обработчик правок")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", unexpected_edit)
+    fake = answers([StreamChunk("Совет", is_final=True)])
+    async with ChatApp().run_test() as pilot:
+        await send(pilot, question)
+        assert fake.calls[0][0] == question
+        assert not pilot.app.screen.query(FileReview)
+
+
+@pytest.mark.parametrize("prompt", [
+    "сделай ревью моего проекта",
+    "сделай ревью без изменения файлов",
+    "Сделай ревью main.py без изменений",
+    "Сделай разбор main.py, не меняй файлы",
+    "Сделай обзор main.py",
+    "Сделай, пожалуйста, разбор main.py",
+])
+async def test_read_only_requests_reach_chat_in_yolo(tmp_path, answers, monkeypatch, prompt):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "main.py"
+    target.write_bytes(b"print('original')\n")
+    fake = answers([StreamChunk("Замечания по коду", is_final=True)])
+
+    async with Main(yolo=True, persist_sessions=False).run_test() as pilot:
+        await send(pilot, prompt)
+        assert fake.calls == [(prompt, str(tmp_path))]
+        assert not pilot.app.screen.query(FileReview)
+        assert "Замечания по коду" in chat_text(pilot.app.screen)
+    assert target.read_bytes() == b"print('original')\n"
+
+
+async def test_fix_runs_pytest_without_a_diff(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "main.py"
+    target.write_bytes(b"print(1)\n")
+
+    async def propose(snapshot, instruction):
+        return snapshot.propose(snapshot.text)
+
+    async def check():
+        return True, "pytest completed", 0
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with Main(persist_sessions=False).run_test() as pilot:
+        monkeypatch.setattr(pilot.app.screen.session, "run_check", check)
+        await send(pilot, "/fix main.py проверь файл")
+        assert "pytest completed" in chat_text(pilot.app.screen)
+        assert not pilot.app.screen.query(FileReview)
+    assert target.read_bytes() == b"print(1)\n"
+
+
+@pytest.mark.parametrize("instruction", ["сделай новый файл", "обнови first.txt и second.txt"])
+async def test_file_edit_requires_explicit_path_when_request_is_ambiguous(tmp_path, monkeypatch, instruction):
+    async def propose(snapshot, request):
+        pytest.fail("Неоднозначный запрос отправлен модели")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, "/edit " + instruction)
+        assert "Укажите путь перед заданием" in chat_text(screen)
+        assert not screen.query(FileReview)
+        assert not list(tmp_path.iterdir())
+
+
+async def test_long_inline_review_scrolls_and_keeps_chat_history(tmp_path, monkeypatch):
+    async def propose(snapshot, instruction):
+        return snapshot.propose("\n".join(f"Строка {i}" for i in range(60)))
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with Main(persist_sessions=False).run_test(size=(60, 24)) as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        await send(pilot, "/help")
+        await send(pilot, "/edit new.txt Добавь текст", wait=False)
+        review = screen.query_one(FileReview)
+        diff = review.query_one("#diff_scroll")
+        for selector in ("#reject_change", "#apply_change"):
+            region = review.query_one(selector).content_region
+            background = screen.get_style_at(region.x, region.y).bgcolor
+            assert background is None or background.is_default
+        assert "Доступные команды" in chat_text(screen)
+        await pilot.press("shift+tab", "end")
+        await pilot.pause(0.3)
+        assert pilot.app.focused is diff
+        assert diff.scroll_y > 0
+        await pilot.press("escape")
+        await pilot.pause()
+        assert pilot.app.screen is screen
+        assert not screen.query(FileReview)
+        assert not (tmp_path / "new.txt").exists()
+
+
+async def test_file_edit_can_be_cancelled_while_waiting(tmp_path, monkeypatch):
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def propose(snapshot, instruction):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        screen.query_one(MessageInput).text = "/edit new.txt Добавь текст"
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=5)
+        await pilot.press("escape")
+        await asyncio.wait_for(stopped.wait(), timeout=5)
+        await pilot.pause()
+        assert pilot.app.screen is screen
+        assert not screen.session.busy
+        assert "Запрос отменен" in chat_text(screen)
+        assert not (tmp_path / "new.txt").exists()
 
 
 async def test_help_command(answers):
@@ -206,7 +850,7 @@ async def test_status_bar_shows_directory_on_narrow_screen(answers, tmp_path):
 
     async with ChatApp().run_test(size=(60, 40)) as pilot:
         screen = pilot.app.screen
-        screen.command_utils.current_directory = long_dir
+        screen.session._commands.current_directory = long_dir
         screen._update_directory_display()
         await pilot.pause()
 
@@ -237,11 +881,174 @@ def test_shorten_home(monkeypatch, tmp_path, path, expected):
     assert shorten_home(path.format(**values)) == expected.format(**values)
 
 
-async def test_main_app_starts_with_menu():
-    async with Main().run_test() as pilot:
-        assert isinstance(pilot.app.screen, MenuApp)
-
+async def test_multiline_input_and_history_restore_a_draft(answers):
+    fake = answers([StreamChunk("Ответ", is_final=True)])
+    async with ChatApp().run_test(size=(80, 24)) as pilot:
+        screen = pilot.app.screen
+        field = screen.query_one(MessageInput)
+        field.text = "  первый отступ"
+        field.move_cursor(field.document.end)
+        await pilot.press("f2")
+        assert field.text == "  первый отступ\n"
+        assert field.cursor_location == (1, 0)
+        pilot.app.post_message(events.Paste("    строка кода\n  строка лога"))
+        await pilot.pause()
+        request = "  первый отступ\n    строка кода\n  строка лога"
+        assert field.text == request
+        assert field.size.height == 3
+        assert fake.calls == []
         await pilot.press("enter")
         await pilot.pause()
+        assert fake.calls[0][0] == request
+        assert request in chat_text(screen)
+        assert field.text == ""
 
-        assert isinstance(pilot.app.screen, ChatScreen)
+        field.text = "Черновик\n  с отступом"
+        await pilot.press("f3")
+        assert field.text == request
+        await pilot.press("f4")
+        assert field.text == "Черновик\n  с отступом"
+
+
+async def test_multiline_terminal_command_is_not_executed(answers, monkeypatch):
+    fake = answers([])
+
+    async def execute(command):
+        pytest.fail(f"Выполнена многострочная команда: {command!r}")
+
+    async with ChatApp().run_test() as pilot:
+        screen = pilot.app.screen
+        monkeypatch.setattr(screen.session, "execute_command", execute)
+        field = screen.query_one(MessageInput)
+        command = "!cd sub\nother"
+        field.text = command
+        await pilot.press("enter")
+        await pilot.pause()
+        assert field.text == command
+        assert fake.calls == []
+        assert "терминальная команда должна занимать одну строку" in chat_text(screen)
+
+
+@pytest.mark.parametrize("no_color", [False, True])
+async def test_main_uses_terminal_palette_and_help_stays_in_chat(monkeypatch, no_color):
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "1")
+    else:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    async with Main(persist_sessions=False).run_test() as pilot:
+        chat_screen = pilot.app.screen
+        assert isinstance(chat_screen, ChatScreen)
+        assert pilot.app.focused.id == "message_input"
+        assert pilot.app.ansi_color
+        history = chat_screen.query_one("#chat_container").region
+        style = chat_screen.get_style_at(history.x + 3, history.bottom - 2)
+        assert style.bgcolor is None or style.bgcolor.is_default
+        editor = pilot.app.focused.content_region
+        style = chat_screen.get_style_at(editor.x + 2, editor.y)
+        assert style.bgcolor is None or style.bgcolor.is_default
+        await send(pilot, "/help")
+        assert pilot.app.screen is chat_screen
+        assert "Доступные команды" in chat_text(chat_screen)
+        assert not chat_screen.list_utils.get_filtered_commands("/menu")
+
+
+async def test_welcome_logo_adapts_to_width_and_hides_after_submit(answers):
+    answers([StreamChunk("Ответ", is_final=True)])
+    async with Main(persist_sessions=False).run_test(size=(120, 40)) as pilot:
+        screen = pilot.app.screen
+        banner = screen.query_one("#chat_banner")
+        assert "░" in str(banner.render())
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        compact = str(banner.render())
+        assert "█" in compact and "░" not in compact
+        await pilot.resize_terminal(40, 24)
+        await pilot.pause()
+        assert str(banner.render()) == "GigaChat"
+        await send(pilot, "Первый вопрос")
+        assert screen.query_one("#chat_welcome").has_class("hidden")
+        assert "Ответ" in chat_text(screen)
+
+
+async def test_main_restores_conversation_context_and_can_switch_dialogs(tmp_path, monkeypatch):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    project = tmp_path / "repo"
+    project.mkdir()
+    home = tmp_path / "home"
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(chat_manager, "conversation_history", [])
+    received_context = []
+
+    async def answer(prompt, project_path):
+        received_context.append([message.content for message in chat_manager.conversation_history])
+        chat_manager.conversation_history.extend([HumanMessage(content=prompt), AIMessage(content="Ответ")])
+        yield StreamChunk("Ответ", is_final=True)
+
+    monkeypatch.setattr(session, "get_answer_stream", answer)
+    store = SessionStore(home / ".gigachat" / "sessions.sqlite3", project)
+    async with Main().run_test() as pilot:
+        await send(pilot, "Первый вопрос")
+    first = store.load()
+    assert first is not None
+    assert first.data.model_history == (("user", "Первый вопрос"), ("assistant", "Ответ"))
+    chat_manager.conversation_history.clear()
+
+    async with Main().run_test() as pilot:
+        screen = pilot.app.screen
+        assert "Первый вопрос" in chat_text(screen)
+        await pilot.press("f3")
+        assert screen.query_one(MessageInput).text == "Первый вопрос"
+        await send(pilot, "Продолжи")
+        assert received_context[-1] == ["Первый вопрос", "Ответ"]
+        await send(pilot, "/new")
+        assert not chat_text(screen).strip()
+        await send(pilot, "Другой диалог")
+        assert received_context[-1] == []
+        second = store.load()
+        assert second.id != first.id
+        await send(pilot, "/sessions")
+        assert first.id in chat_text(screen) and second.id in chat_text(screen)
+        await send(pilot, "/resume " + first.id)
+        assert "Продолжи" in chat_text(screen)
+        assert "Другой диалог" not in chat_text(screen)
+
+
+async def test_session_does_not_persist_shell_output_or_pending_diff(tmp_path, monkeypatch, answers):
+    answers([StreamChunk("Ответ", is_final=True)])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    store = SessionStore(tmp_path / ".gigachat" / "sessions.sqlite3", tmp_path)
+
+    async def execute(command):
+        return True, "секретный вывод теста", 0
+
+    async def propose(snapshot, instruction):
+        return snapshot.propose("Содержимое незаписанного файла")
+
+    monkeypatch.setattr(chat_manager, "propose_file_edit", propose)
+    monkeypatch.setattr(chat_manager, "conversation_history", [])
+    async with Main().run_test() as pilot:
+        screen = pilot.app.screen
+        screen.session._commands.current_directory = tmp_path
+        monkeypatch.setattr(screen.session, "execute_command", execute)
+        await send(pilot, "!echo тестовые данные")
+        assert "секретный вывод теста" in chat_text(screen)
+        await send(pilot, "Вопрос")
+        saved = store.load()
+        assert saved.data.prompts == ("Вопрос",)
+        assert "секретный вывод теста" not in " ".join(saved.data.exchanges)
+        await send(pilot, "Создай файл new.txt с примером", wait=False)
+        assert screen.query_one(FileReview)
+        assert store.load() == saved
+        pending = screen.session.task
+        pilot.app.exit()
+
+    await asyncio.wait_for(pending, timeout=5)
+    assert not (tmp_path / "new.txt").exists()
+    assert store.load() == saved
+    async with Main().run_test() as pilot:
+        screen = pilot.app.screen
+        assert not screen.query(FileReview)
+        assert "Вопрос" in chat_text(screen)

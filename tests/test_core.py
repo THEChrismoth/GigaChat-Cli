@@ -1,10 +1,13 @@
+import json
+import subprocess
 import os
 from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from gigachat_cli.utils import core
+from gigachat_cli.core import model as core
+from gigachat_cli.core.file_edit import FileEditError, read_snapshot
 
 
 class FakeGiga:
@@ -15,7 +18,7 @@ class FakeGiga:
         self.error = error
         self.requests = []
 
-    def stream(self, messages):
+    async def astream(self, messages):
         self.requests.append(messages)
         for content in self.chunks:
             yield SimpleNamespace(content=content)
@@ -40,7 +43,7 @@ async def collect(stream):
     ("text", "expected"),
     [
         ("объясни main.py", ["main.py"]),
-        ("сравни src/utils/core.py и README.md", ["src/utils/core.py", "README.md"]),
+        ("сравни src/gigachat_cli/core/session.py и README.md", ["src/gigachat_cli/core/session.py", "README.md"]),
         ("посмотри pkg\\main.py", ["pkg\\main.py"]),
         ("main.py и еще раз main.py", ["main.py"]),
         ("CONFIG.YAML", ["CONFIG.YAML"]),
@@ -92,6 +95,9 @@ def test_detect_language(manager, text, expected):
         ("analyze this project", True),
         ("как назвать проект?", False),
         ("сделай анализ данных", False),
+        ("давай сделаем код-ревью проекта", True),
+        ("что значит ревью?", False),
+        ("ревью.md", False),
     ],
 )
 def test_is_project_analysis_request(text, expected):
@@ -201,6 +207,81 @@ def test_giga_client_is_cached(manager, monkeypatch):
 
 # --- Отправка сообщений ---
 
+@pytest.mark.parametrize(
+    ("content", "finish_reason", "valid"),
+    [
+        ('{"content":"new text\n"}'.replace("\n", "\\n"), "stop", True),
+        ('{"content":"shortened"}', "length", False),
+        ('{"path":"other.txt","content":"changed"}', "stop", False),
+        ("Обычный ответ вместо предложения", "stop", False),
+    ],
+)
+async def test_propose_file_edit_is_isolated(manager, monkeypatch, tmp_path, content, finish_reason, valid):
+    target = tmp_path / "notes.txt"
+    target.write_bytes(b"original")
+    snapshot = read_snapshot(tmp_path, target.name)
+    manager.conversation_history.append(HumanMessage(content="Другое сообщение"))
+
+    async def invoke(messages):
+        assert len(messages) == 2
+        assert '"path": "notes.txt"' in messages[-1].content
+        assert '"content": "original"' in messages[-1].content
+        assert "Измени текст" in messages[-1].content
+        return AIMessage(content=content, response_metadata={"finish_reason": finish_reason})
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
+    if valid:
+        change = await manager.propose_file_edit(snapshot, "Измени текст")
+        assert "+new text\n" in change.diff()
+    else:
+        with pytest.raises(FileEditError):
+            await manager.propose_file_edit(snapshot, "Измени текст")
+    assert target.read_bytes() == b"original"
+    assert [message.content for message in manager.conversation_history] == ["Другое сообщение"]
+
+
+@pytest.mark.parametrize("corrected", [True, False])
+async def test_python_proposal_retries_syntax_error_once(manager, monkeypatch, tmp_path, corrected):
+    target = tmp_path / "example.py"
+    broken = "return 1\n"
+    replies = iter([broken, 'print("ok")\n' if corrected else broken])
+    requests = []
+
+    async def invoke(messages):
+        requests.append(json.loads(messages[-1].content))
+        return AIMessage(content=json.dumps({"content": next(replies)}))
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
+    snapshot = read_snapshot(tmp_path, target.name)
+    if corrected:
+        edit = await manager.propose_file_edit(snapshot, "Выведи ok")
+        assert edit.after == b'print("ok")\n'
+    else:
+        with pytest.raises(FileEditError, match="Ошибка синтаксиса Python в строке 1"):
+            await manager.propose_file_edit(snapshot, "Выведи ok")
+
+    assert len(requests) == 2
+    assert requests[1]["instruction"] == requests[0]["instruction"] == "Выведи ok"
+    assert requests[1]["path"] == requests[0]["path"] == target.name
+    assert requests[1]["previous_proposal"] == broken
+    assert "outside function" in requests[1]["syntax_error"]
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(("opening", "closing"), [("python\n```", "```"), ("```python", "``` ```")])
+async def test_new_python_proposal_preserves_docstring_quotes(manager, monkeypatch, tmp_path, opening, closing):
+    source = 'def greeting():\n    """Вернуть приветствие."""\n    return "Привет!"\n'
+
+    async def invoke(messages):
+        return AIMessage(content=f"{opening}\n{source}{closing}")
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(ainvoke=invoke))
+
+    edit = await manager.propose_file_edit(read_snapshot(tmp_path, "greeting.py"), "Напиши функцию с docstring")
+
+    assert edit.after == source.encode()
+
+
 async def test_send_message_stream(manager, fake_giga):
     chunks = await collect(manager.send_message_stream("Привет?", "system"))
 
@@ -280,10 +361,24 @@ async def test_file_mention_loads_file_from_project_path(manager, fake_giga, pro
     assert manager.get_conversation_stats()["last_files_context"] == ["main.py"]
 
 
-async def test_missing_file_falls_back_to_plain_request(manager, fake_giga, project):
-    await collect(manager.get_answer_stream("что в nope.py?", project_path=str(project)))
+async def test_missing_relative_path_does_not_send_namesake(manager, fake_giga, project):
+    chunks = await collect(manager.get_answer_stream("что в missing/main.py?", project_path=str(project)))
 
-    assert fake_giga.requests[0][-1].content == "что в nope.py?"
+    assert chunks[-1].is_final and "missing/main.py" in chunks[-1].error
+    assert not fake_giga.requests
+
+
+@pytest.mark.parametrize(("name", "content"), [
+    ("sample.json", '[{"answer": 42}]'),
+    ("pyproject.toml", '[project]\nname = "sample"\n'),
+])
+async def test_context_accepts_files_starting_with_bracket(manager, fake_giga, project, name, content):
+    (project / name).write_text(content, encoding="utf-8")
+    chunks = await collect(manager.get_answer_stream(f"Сравни {name} и absent.py", project_path=str(project)))
+
+    assert content in fake_giga.requests[0][-1].content
+    assert "absent.py" in chunks[0].content
+    assert manager.get_conversation_stats()["last_files_context"] == [name]
 
 
 async def test_project_analysis_uses_project_path(manager, fake_giga, project):
@@ -294,6 +389,79 @@ async def test_project_analysis_uses_project_path(manager, fake_giga, project):
     assert os.path.join("pkg", "main.py") in prompt
     assert "lib.js" not in prompt
     assert manager.conversation_history[0].content == "Покажи структуру проекта"
+
+
+@pytest.mark.parametrize("prompt", ["Сделай ревью моего проекта", "Ревью без изменения файлов", "/review main.py"])
+async def test_review_requests_and_reads_source_without_executing_writes(manager, monkeypatch, project, prompt):
+    calls = iter([
+        ("search_code", {"query": "root main"}),
+        ("read_file", {"path": "main.py", "start_line": 1, "line_count": 1}),
+        ("write_file", {"path": "main.py", "content": "changed"}),
+    ])
+    requests = []
+
+    async def invoke(messages):
+        requests.append(list(messages))
+        call = next(calls, None)
+        if call:
+            name, args = call
+            return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])
+        return AIMessage(content="Замечание в main.py:1")
+
+    def bind(tools, *, tool_choice):
+        assert {tool["name"] for tool in tools} == {"list_files", "search_code", "read_file"}
+        return SimpleNamespace(ainvoke=invoke)
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(bind_tools=bind))
+    chunks = await collect(manager.get_answer_stream(prompt, project_path=str(project)))
+
+    assert chunks[0].content == "Замечание в main.py:1" and chunks[-1].is_final
+    assert json.loads(requests[1][-1].content)["matches"][0]["path"] == "main.py"
+    assert json.loads(requests[2][-1].content)["lines"] == [{"line": 1, "text": "print('root main')"}]
+    assert "error" in json.loads(requests[3][-1].content)
+    assert (project / "main.py").read_text() == "print('root main')\n"
+    assert [message.content for message in manager.conversation_history] == [prompt, chunks[0].content]
+    assert manager.get_conversation_stats()["last_files_context"] == ["main.py"]
+
+
+async def test_review_stops_tool_calls_at_budget(manager, monkeypatch, project):
+    choices = []
+
+    def bind(tools, *, tool_choice):
+        choices.append(tool_choice)
+
+        async def invoke(messages):
+            if tool_choice == "none":
+                assert len([message for message in messages if message.type == "tool"]) == core._REVIEW_TOOL_LIMIT
+                return AIMessage(content="Итоги просмотренного кода")
+            return AIMessage(content="", tool_calls=[{
+                "name": "read_file", "args": {"path": "main.py"}, "id": str(len(messages)),
+            }])
+
+        return SimpleNamespace(ainvoke=invoke)
+
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: SimpleNamespace(bind_tools=bind))
+    chunks = await collect(manager.get_answer_stream("/review", project_path=str(project)))
+    assert choices == ["auto", "none"]
+    assert chunks[0].content == "Итоги просмотренного кода"
+
+
+@pytest.mark.parametrize("read_first", [False, True])
+async def test_incomplete_review_reports_error(manager, monkeypatch, project, read_first):
+    async def invoke(messages):
+        if read_first and messages[-1].type == "human":
+            return AIMessage(content="", tool_calls=[{
+                "name": "read_file", "args": {"path": "main.py"}, "id": "read",
+            }])
+        return AIMessage(content="Часть ответа", response_metadata={"finish_reason": "length" if read_first else "stop"})
+
+    provider = SimpleNamespace(bind_tools=lambda *args, **kwargs: SimpleNamespace(ainvoke=invoke))
+    monkeypatch.setattr(manager, "_get_giga_chat_instance", lambda: provider)
+    chunks = await collect(manager.get_answer_stream("/review", project_path=str(project)))
+
+    assert chunks[-1].is_final and chunks[-1].error
+    assert bool(chunks[0].content) is read_first
+    assert manager.conversation_history == []
 
 
 async def test_explain_inline_code(manager, fake_giga):
@@ -331,7 +499,7 @@ def test_find_file_by_name_prefers_shallow_file(manager, project):
     assert manager._find_file_in_project("main.py", str(project)) == str(project / "main.py")
 
 
-@pytest.mark.parametrize("name", ["pkg/main.py", "pkg\\main.py", "./pkg/main.py", "PKG/MAIN.PY"])
+@pytest.mark.parametrize("name", ["pkg/main.py", "pkg\\main.py", "./pkg/main.py"])
 def test_find_file_by_relative_path(manager, project, name):
     assert manager._find_file_in_project(name, str(project)) == str(project / "pkg" / "main.py")
 
@@ -339,6 +507,23 @@ def test_find_file_by_relative_path(manager, project, name):
 def test_find_file_ignores_service_and_hidden_files(manager, project):
     assert manager._find_file_in_project("lib.js", str(project)) is None
     assert manager._find_file_in_project(".hidden.py", str(project)) is None
+
+
+def test_find_file_preserves_case_on_posix(manager, project):
+    sibling = project / "Main.py"
+    if sibling.exists():
+        pytest.skip("Файловая система не различает регистр имён")
+    sibling.write_text("another file", encoding="utf-8")
+
+    assert manager._find_file_in_project("main.py", str(project)) == str(project / "main.py")
+    assert manager._find_file_in_project("Main.py", str(project)) == str(sibling)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Обратный слеш допустим в имени файла только на POSIX")
+def test_find_file_keeps_posix_backslash_distinct_from_separator(manager, project):
+    (project / "missing\\main.py").write_text("different file", encoding="utf-8")
+
+    assert manager._find_file_in_project("missing/main.py", str(project)) is None
 
 
 def test_find_file_rebuilds_stale_index(manager, project):
@@ -363,16 +548,16 @@ def test_find_file_does_not_match_substring(manager, project):
 
 
 async def test_load_file_content(manager, project, tmp_path):
-    assert await manager.load_file_content(str(project / "main.py")) == "print('root main')\n"
-    assert await manager.load_file_content(str(tmp_path / "missing.py")) is None
+    assert (await manager.load_file_content(str(project / "main.py"))).text == "print('root main')\n"
+    assert (await manager.load_file_content(str(tmp_path / "missing.py"))).error
 
     big = tmp_path / "big.txt"
     big.write_text("x" * 100, encoding="utf-8")
-    assert (await manager.load_file_content(str(big), max_size=10)).startswith("[Файл слишком большой")
+    assert "лимит 10 байт" in (await manager.load_file_content(str(big), max_size=10)).error
 
     binary = tmp_path / "data.bin"
     binary.write_bytes(b"\xff\xfe\x00\x81")
-    assert await manager.load_file_content(str(binary)) == "[Бинарный файл или неподдерживаемая кодировка]"
+    assert (await manager.load_file_content(str(binary))).error == "Бинарный файл или неподдерживаемая кодировка."
 
 
 async def test_load_project_context(manager, project):
@@ -382,3 +567,14 @@ async def test_load_project_context(manager, project):
     assert sorted(context["file_structure"]) == sorted(["README.md", "main.py", os.path.join("pkg", "main.py")])
     # README.md - конфигурационный файл, поэтому идет первым
     assert next(iter(context["key_files"])) == "README.md"
+
+
+async def test_automatic_context_respects_gitignore(manager, project):
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    (project / ".gitignore").write_text("private.py\n", encoding="utf-8")
+    (project / "private.py").write_text("secret_marker = 42\n", encoding="utf-8")
+    context = await manager.load_project_context(str(project))
+    assert "private.py" not in context["file_structure"]
+    files = await manager.load_multiple_files(["private.py"], str(project))
+    assert files["private.py"].text is None
+    assert files["private.py"].error
